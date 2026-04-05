@@ -7,11 +7,8 @@ Single-run macOS CLI for checking whether the Poland Schengen visa page for Los 
 - Opens real Google Chrome on macOS
 - Navigates directly to:
   `https://secure.e-konsulat.gov.pl/placowki/126/wiza-schengen/wizyty/weryfikacja-obrazkowa`
-- Reads the captcha with local OCR
 - Uses the local captcha prototype model directly in `check`
-- Re-runs OCR until it gets a 4-character candidate, including symbols such as `@`, `+`, `=`, and `#`
-- If the first OCR path is still weak, switches to an alternate processed captcha capture and runs OCR again
-- Only submits OCR when it has a 4-character captcha candidate; otherwise it refreshes the captcha and retries automatically
+- Tries both raw and processed captcha captures and submits the best 4-character model candidate automatically
 - Preserves visible captcha symbols such as `@`, `+`, and `=` instead of stripping them out
 - Clicks `Dalej`
 - Selects:
@@ -128,14 +125,12 @@ npm test
 2. Navigates directly to the Schengen captcha page
 3. Extracts the captcha image from the page
 4. Saves the captcha image into `artifacts/`
-5. Runs OCR locally with a 4-character captcha heuristic and symbol-aware filtering
-6. If the first OCR pass is not good enough, retries OCR on the same capture and then on an alternate processed capture
-7. Only if OCR resolves to a 4-character captcha candidate, fills the input and submits automatically
-8. If OCR still does not have 4 characters, refreshes the captcha and retries automatically
-9. If the captcha is rejected, saves the refreshed captcha image and retries automatically
-10. Selects the three post-captcha dropdowns
-11. Saves a `post-captcha-before-selection` status artifact when captcha has been cleared
-12. Saves a `post-captcha-after-selection` status artifact after trying the three dropdowns
+5. Runs the local captcha model against raw and processed captures
+6. Submits the best 4-character model candidate automatically and retries captcha when needed
+7. If captcha UI disappears after submit, treats that as a post-captcha transition instead of re-entering captcha logic
+8. Selects the three post-captcha dropdowns
+9. Detects either real `Termin` options or the final Polish “all reserved” state
+10. Saves `post-captcha-before-selection` and `post-captcha-after-selection` artifacts
 11. Prints compact JSON like:
 
 ```json
@@ -148,6 +143,9 @@ npm test
   "pageUrl": "https://secure.e-konsulat.gov.pl/..."
 }
 ```
+
+12. Prints one final Chinese summary line:
+    `有预约时间` or `没有预约时间`
 
 ## Result Reasons
 
@@ -162,12 +160,12 @@ npm test
 
 - `check` is now fully automated around the local captcha model. The terminal no longer blocks waiting for manual captcha correction.
 - `check` now loads `artifacts/captcha-model-current/model.json` by default and submits the best local-model guess on each attempt.
-- OCR cleaning now restricts output to the known 4-character captcha alphabet, including `@`, `+`, `=`, and `#`.
-- The page runtime now exposes both raw and processed captcha captures so OCR has a fallback image source before the next retry.
+- The captcha alphabet remains restricted to known 4-character symbols, including `@`, `+`, `=`, and `#`.
+- The page runtime exposes both raw and processed captcha captures so the local model can score multiple variants before the next retry.
 - Post-captcha snapshots now include field diagnostics for `Rodzaj usługi`, `Lokalizacja`, `Chcę zarezerwować termin dla`, and `Termin`, including control type, current text, and visible option texts.
 - Post-captcha snapshots now also include `selectionLabelEvidence`, so the CLI can stop captcha retries as soon as the next-step labels are visible.
 - The post-captcha selector runtime now falls back to the visible vertical order of the four `mat-select` controls when the live page does not expose usable label text around each dropdown.
-- Final “all reserved” detection now also matches normalized and diacritic-stripped page text, so the Polish result is still recognized when the live page inserts line breaks or non-breaking spaces.
+- Final “all reserved” detection now also falls back to normalized `bodyTextSample/bodyTextTailSample`, so the Polish result is still recognized even when runtime-level `unavailabilityText` is temporarily empty.
 - Positive hits still use desktop notification support when enabled.
 - Debug mode is intentionally verbose; normal `check` output is intentionally compact.
 

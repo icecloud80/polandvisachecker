@@ -2,7 +2,6 @@
 
 ## 1. Architecture
 
-- `src/chrome-cli.js`: the primary v1 entrypoint for `doctor`, `check`, `debug`, and `collect-captcha`
 - `src/chrome-cli.js`: the primary v1 entrypoint for `doctor`, `check`, `debug`, `collect-captcha`, and `diagnose-refresh`
 - `src/captcha-labeler.js`: lightweight local web server that turns `labels.json` into a one-image-at-a-time labeling UI
 - `src/captcha-suggest.js`: batch OCR suggester that fills `ocrText` for unlabeled captcha entries
@@ -37,14 +36,15 @@
 8. The CLI writes a `post-captcha-before-selection` artifact once captcha is cleared.
 9. The runtime reads the `Termin` control and the reserved-message area.
 10. The CLI writes a `post-captcha-after-selection` artifact with field diagnostics and selection action results.
-11. `src/status.js` converts those signals into the final status object.
+11. `src/status.js` converts those signals into the final status object, including a body-text fallback for the final Polish no-slot sentence.
 12. The CLI prints compact JSON and sends a desktop notification only if dates are available.
-11. If the command is `collect-captcha`, the CLI saves captcha samples and a blank labeling manifest instead of submitting the form.
-12. If the command is `diagnose-refresh`, the CLI runs refresh-only attempts, records before/after evidence, and writes a structured summary for Phase A analysis.
-13. If the command is `captcha:label`, the local labeler selects the latest dataset, opens a tiny browser UI, and saves each `expectedText` update back into `labels.json`.
-14. If the command is `captcha:suggest`, the OCR suggester scans unlabeled entries, writes `ocrText` and confidence metadata into the manifest, and leaves human confirmation to the labeler.
-15. If the command is `captcha:prepare-train`, the training exporter validates the manifest, copies images into a training directory, assigns deterministic splits, and writes summary plus JSONL files.
-16. If the command is `captcha:train-local`, the local trainer rebuilds the training directory, decodes PNG captchas, extracts 4 glyph vectors per image, trains a character prototype model from the train split, and writes summary plus per-split prediction reports.
+13. The CLI prints one final Chinese summary line after the JSON: `有预约时间` or `没有预约时间`.
+14. If the command is `collect-captcha`, the CLI saves captcha samples and a blank labeling manifest instead of submitting the form.
+15. If the command is `diagnose-refresh`, the CLI runs refresh-only attempts, records before/after evidence, and writes a structured summary for Phase A analysis.
+16. If the command is `captcha:label`, the local labeler selects the latest dataset, opens a tiny browser UI, and saves each `expectedText` update back into `labels.json`.
+17. If the command is `captcha:suggest`, the OCR suggester scans unlabeled entries, writes `ocrText` and confidence metadata into the manifest, and leaves human confirmation to the labeler.
+18. If the command is `captcha:prepare-train`, the training exporter validates the manifest, copies images into a training directory, assigns deterministic splits, and writes summary plus JSONL files.
+19. If the command is `captcha:train-local`, the local trainer rebuilds the training directory, decodes PNG captchas, extracts 4 glyph vectors per image, trains a character prototype model from the train split, and writes summary plus per-split prediction reports.
 
 ## 3. Rule Mapping
 
@@ -140,6 +140,9 @@
 
 - Rule: the final “all reserved” Polish sentence must still be recognized when the live page inserts hard line breaks, non-breaking spaces, or diacritic-normalization differences.
   Design: `src/chrome-page.js` now extracts the unavailable message through three passes: raw-text match, normalized-space match, and diacritic-stripped normalized match.
+
+- Rule: if page-level unavailable extraction still misses, the final result must still converge to the correct no-slot state.
+  Design: `src/status.js` now re-checks `bodyTextSample` and `bodyTextTailSample` for the normalized Polish reserved sentence before falling back to `selection_step`.
 
 ## 4. Captcha Design
 
@@ -245,3 +248,4 @@
 - If that final recheck still cannot stabilize the next-page evidence in time, the flow now prefers a conservative `selection_step` promotion over another captcha refresh, because the operator has already confirmed this state means the page advanced.
 - The live `mat-select` controls may expose empty text and empty parent/container text, so selector stability now depends on the fixed visual order fallback until a richer label-to-control association is discovered.
 - The final reserved-state sentence can visually match while raw DOM text still differs in whitespace or Unicode form, so unavailable-message extraction now normalizes text before giving up.
+- Even after that normalization, page-level extraction can still occasionally miss the final state, so business-layer inference now performs one last body-text fallback before preserving `selection_step`.

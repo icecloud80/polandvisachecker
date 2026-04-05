@@ -1,7 +1,66 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { inferAvailability } = require("../src/status");
+const {
+  extractUnavailableMessage,
+  inferAvailability,
+  normalizeAvailabilityText,
+} = require("../src/status");
+
+/**
+ * 作用：
+ * 覆盖页面文本规范化会处理换行和重音差异的基础规则。
+ *
+ * 为什么这样写：
+ * 最终无号文案现在要支持从页面正文样本里兜底提取。
+ * 如果规范化不能稳定处理换行和重音，业务层仍会漏掉用户肉眼已经看到的最终状态。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入带换行和波兰语重音的示例文本。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 这里只验证业务匹配用规范化，不涉及页面展示。
+ * - 结果应统一为小写且去重音。
+ */
+test("normalizeAvailabilityText collapses whitespace and strips diacritics", () => {
+  assert.equal(
+    normalizeAvailabilityText("Chwilowo  wszystkie\nudostępnione  terminy"),
+    "chwilowo wszystkie udostepnione terminy"
+  );
+});
+
+/**
+ * 作用：
+ * 覆盖业务层会从页面文本样本里兜底提取无号文案的规则。
+ *
+ * 为什么这样写：
+ * live 站点已经证明：最终页面正文里有 Polish 无号文案，
+ * 但 runtime 某些轮次没有及时把它填进 `unavailabilityText`。
+ * 这条测试锁住最终版的兜底提取行为。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入只带 bodyTextTailSample 的示例信号对象。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 当显式 `unavailabilityText` 为空时，应该回退检查页面正文样本。
+ * - 命中后应返回稳定的 Polish 文案。
+ */
+test("extractUnavailableMessage falls back to page text samples when explicit text is missing", () => {
+  assert.equal(
+    extractUnavailableMessage({
+      unavailabilityText: "",
+      bodyTextTailSample:
+        "Rodzaj usługi Wiza Schengen Lokalizacja Los Angeles Chwilowo wszystkie udostępnione terminy zostały zarezerwowane, prosimy spróbować umówić wizytę w terminie późniejszym.",
+    }),
+    "Chwilowo wszystkie udostępnione terminy zostały zarezerwowane, prosimy spróbować umówić wizytę w terminie późniejszym"
+  );
+});
 
 /**
  * 作用：
@@ -53,6 +112,38 @@ test("inferAvailability returns unavailable when the exact Polish reserved messa
     dropdownOptions: 0,
     unavailabilityText:
       "Chwilowo wszystkie udostępnione terminy zostały zarezerwowane, prosimy spróbować umówić wizytę w terminie późniejszym",
+  });
+
+  assert.equal(result.isAvailable, false);
+  assert.equal(result.reason, "all_dates_reserved");
+  assert.equal(result.availableDateCount, 0);
+});
+
+/**
+ * 作用：
+ * 覆盖“显式字段为空但正文样本已经显示最终无号文案”时仍判定为无号。
+ *
+ * 为什么这样写：
+ * 这是这次最终版修复的核心业务问题。
+ * 如果正文里已经出现最终结果，CLI 不应该再停在 `selection_step`。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入页面正文样本和 selection_step 回退原因。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 这条规则是对 runtime 信号缺失的业务层兜底。
+ * - 一旦正文样本命中，无号判断应高于 fallbackReason。
+ */
+test("inferAvailability uses page text samples to detect all-dates-reserved as a final fallback", () => {
+  const result = inferAvailability({
+    dropdownOptions: 0,
+    unavailabilityText: "",
+    bodyTextTailSample:
+      "Rodzaj usługi Wiza Schengen Lokalizacja Los Angeles Chwilowo wszystkie udostępnione terminy zostały zarezerwowane, prosimy spróbować umówić wizytę w terminie późniejszym.",
+    fallbackReason: "selection_step",
   });
 
   assert.equal(result.isAvailable, false);

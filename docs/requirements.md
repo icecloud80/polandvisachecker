@@ -41,6 +41,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Mark the result as unavailable when the page shows:
   `Chwilowo wszystkie udostępnione terminy zostały zarezerwowane, prosimy spróbować umówić wizytę w terminie późniejszym`
 - Print compact JSON with `checkedAt`, `isAvailable`, `reason`, `availableDateCount`, `optionTexts`, and `pageUrl`.
+- After the JSON block, print one final Chinese summary line: `有预约时间` or `没有预约时间`.
 - Support `doctor`, `check`, `debug`, and `collect-captcha` commands.
 - Support a `captcha:label` command that opens a local one-image-at-a-time labeling UI on top of `labels.json`.
 - Support a `captcha:suggest` command that batch-runs OCR for unlabeled captcha entries and writes machine suggestions back into the manifest.
@@ -82,6 +83,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Post-captcha diagnostics must also preserve whether the next-step field labels are already visible, even if the dropdown controls are not yet selectable.
 - Post-captcha selector logic must fall back to the fixed visual order of the four visible dropdowns when the live `mat-select` controls do not expose usable label context.
 - Final unavailable-state detection must survive line breaks, non-breaking spaces, and Unicode normalization differences in the Polish reserved message.
+- Final unavailable-state detection must still work when the reserved sentence appears only in `bodyTextSample` / `bodyTextTailSample` and `unavailabilityText` is temporarily empty.
 - Post-captcha selection controls and date evidence must outrank captcha-path evidence, because the live site can keep the old captcha URL even after the next page is visible.
 - Date-option evidence is stronger than message-text evidence.
 - When no strong evidence exists, the tool must return a conservative non-available result.
@@ -126,6 +128,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - If that re-check still does not stabilize the next page in time, treat the run as already past captcha and continue with post-captcha selection instead of refreshing captcha again.
 - During post-captcha selection, keep text-based field matching first, but if the live custom selects have empty context text then map the four visible controls by top-to-bottom order to service, location, people count, and date.
 - During final result reading, match the Polish “all reserved” sentence on raw text first, then on normalized-space text, and finally on diacritic-stripped normalized text.
+- If page-level extraction still misses the final Polish sentence, run the same normalized match again in the business-layer inference using `bodyTextSample` and `bodyTextTailSample` before keeping `selection_step`.
 
 ## 6. AI Strategy
 
@@ -147,6 +150,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - After that transient-state recheck, prefer a conservative `selection_step` promotion over any further captcha retry, because the live operator has confirmed this state means captcha already passed.
 - Treat the fixed visual order of the four live dropdowns as a valid selector heuristic, because the current `mat-select` markup can expose no usable label text on the trigger or its immediate wrappers.
 - Treat normalized reserved-message matching as a required heuristic, because the live page can visually show the final state while raw DOM text still differs in whitespace or Unicode composition.
+- Treat `bodyTextSample/bodyTextTailSample` as the final no-slot fallback, because the live final page can visually show the result even when the explicit unavailable field was not captured in that exact snapshot.
 - Treat refresh diagnostics as the prerequisite evidence layer before changing OCR or model strategy again.
 - Treat refresh-candidate enumeration as the first Phase A debugging surface, because a visible `Odśwież` label does not guarantee the current selector points at the real interactive node.
 - When refresh-candidate enumeration returns nothing, treat the actionable-control dump as the next debugging surface before changing click strategy again.
@@ -235,3 +239,4 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - 2026-04-05: hardened that post-submit guard so if captcha UI is still gone after the recheck, the checker force-promotes the flow to `selection_step` and stops all remaining captcha retry logic.
 - 2026-04-05: added a post-captcha selector fallback that maps the four visible `mat-select` controls by vertical order when live context-text matching returns `not_found` for every dropdown.
 - 2026-04-05: hardened final no-slot detection so the Polish reserved sentence is recognized even when the live page wraps it across lines or emits different Unicode spacing/diacritic forms.
+- 2026-04-05: added a business-layer no-slot fallback that scans normalized `bodyTextSample/bodyTextTailSample`, so final runs no longer stay at `selection_step` when the Polish reserved sentence is already visible in the captured page text.

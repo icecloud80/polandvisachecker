@@ -8,6 +8,7 @@ const {
   buildCaptchaCollectionRunName,
   buildCaptchaCollectionSamplePrefix,
   buildCaptchaSignatureDigest,
+  buildFinalAvailabilityLine,
   buildRefreshDiagnosticAttemptPrefix,
   buildRefreshDiagnosticRunName,
   createCaptchaCollectionRunContext,
@@ -79,6 +80,44 @@ test("buildRefreshDiagnosticRunName prefixes refresh diagnostics consistently", 
   const runName = buildRefreshDiagnosticRunName();
 
   assert.match(runName, /^captcha-refresh-diagnostic-\d+$/);
+});
+
+/**
+ * 作用：
+ * 验证最终中文状态行会把结构化结果压缩成直观结论。
+ *
+ * 为什么这样写：
+ * 用户明确要求 CLI 最后一行直接输出“有预约时间”或“没有预约时间”。
+ * 这条测试锁住中文文案，避免以后只剩 JSON 或改成别的表述。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入可用和不可用两种结果对象。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 当前只区分可用 / 不可用两类。
+ * - 任何非 available 状态都应保守映射为“没有预约时间”。
+ */
+test("buildFinalAvailabilityLine returns a concise Chinese availability summary", () => {
+  assert.equal(
+    buildFinalAvailabilityLine({
+      status: {
+        isAvailable: true,
+      },
+    }),
+    "有预约时间"
+  );
+  assert.equal(
+    buildFinalAvailabilityLine({
+      status: {
+        isAvailable: false,
+        reason: "all_dates_reserved",
+      },
+    }),
+    "没有预约时间"
+  );
 });
 
 /**

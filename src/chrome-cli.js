@@ -1604,6 +1604,36 @@ function writeChromeStatusArtifact(artifactsDir, stageLabel, snapshot, extraPayl
 
 /**
  * 作用：
+ * 把最终检查结果转换成用户可直接阅读的中文状态行。
+ *
+ * 为什么这样写：
+ * 用户希望 CLI 在 JSON 之外再给出一句非常直观的结论，
+ * 这样即使不看结构化字段，也能立刻知道当前是否有预约时间。
+ * 单独抽成纯函数后，测试可以稳定锁住文案，不会和浏览器流程耦合。
+ *
+ * 输入：
+ * @param {object} result - `runChromeCheck` 生成的最终结果对象。
+ *
+ * 输出：
+ * @returns {string} 面向用户的中文状态行。
+ *
+ * 注意：
+ * - 当前只区分“有预约时间”和“没有预约时间”。
+ * - 未知状态、无号状态、captcha 未过状态都保守归入“没有预约时间”。
+ */
+function buildFinalAvailabilityLine(result) {
+  const input = result && typeof result === "object" ? result : {};
+  const status = input.status && typeof input.status === "object" ? input.status : {};
+
+  if (status.isAvailable === true) {
+    return "有预约时间";
+  }
+
+  return "没有预约时间";
+}
+
+/**
+ * 作用：
  * 读取当前页面快照，并在验证码图片尚未挂到 DOM 时做短暂补偿等待。
  *
  * 为什么这样写：
@@ -1895,6 +1925,8 @@ async function runChromeCheck(config) {
   const inferredStatus = inferAvailability({
     optionTexts: status.optionTexts,
     unavailabilityText: status.unavailabilityText,
+    bodyTextSample: status.bodyTextSample,
+    bodyTextTailSample: status.bodyTextTailSample,
     fallbackReason: status.reason,
   });
 
@@ -1921,6 +1953,7 @@ async function runChromeCheck(config) {
     optionTexts: status.optionTexts,
     pageUrl: status.pageUrl,
   }, null, 2));
+  console.log(buildFinalAvailabilityLine(result));
 
   return result;
 }
@@ -2353,6 +2386,7 @@ module.exports = {
   buildCaptchaCollectionRunName,
   buildCaptchaCollectionSamplePrefix,
   buildCaptchaSignatureDigest,
+  buildFinalAvailabilityLine,
   buildCaptchaImageSources,
   buildRefreshDiagnosticAttemptPrefix,
   buildRefreshDiagnosticRunName,
