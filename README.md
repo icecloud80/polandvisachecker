@@ -174,7 +174,7 @@ npm test
 - Final “all reserved” detection now also falls back to normalized `bodyTextSample/bodyTextTailSample`, so the Polish result is still recognized even when runtime-level `unavailabilityText` is temporarily empty.
 - Positive hits still use macOS desktop notification support when enabled, and the notification copy is now Chinese.
 - Debug mode is intentionally verbose; normal `check` output is intentionally compact.
-- `npm run schedule:launchd` writes a shell script, a `.plist`, and an `INSTALL.md` guide into `artifacts/launchd/`.
+- `npm run schedule:launchd` writes a shell script, a `.plist`, and an `INSTALL.md` guide into `scheduler/`.
 - The generated `launchd` bundle does not install itself automatically; you still copy the `.plist` into `~/Library/LaunchAgents/` when you are ready.
 
 ## macOS Scheduling
@@ -187,11 +187,13 @@ npm run schedule:launchd
 
 It generates:
 
-- `artifacts/launchd/run-check-every-2-hours.sh`
-- `artifacts/launchd/<label>.plist`
-- `artifacts/launchd/INSTALL.md`
+- `scheduler/run-check-every-2-hours.sh`
+- `scheduler/poland-visa-checker.launchagent.plist`
+- `scheduler/INSTALL.md`
 
 The shell script runs one `check` per launchd trigger, and the plist uses `StartInterval=7200` so macOS runs it every 2 hours.
+
+`scheduler/` is the project-owned directory for launchd setup files. Runtime screenshots, datasets, model files, and logs still stay under `artifacts/`, which is intentionally ignored by git.
 
 ## Post-Captcha Artifacts
 
@@ -220,7 +222,7 @@ The shell script runs one `check` per launchd trigger, and the plist uses `Start
 ## Captcha Labeling UI
 
 - `npm run captcha:label` starts a local web UI for the latest available dataset and attempts to open it in your browser automatically.
-- `npm run captcha:label` now defaults to [captcha-images-current-labels.json](/Users/mo.li/Workspace/poland/artifacts/captcha-images-current-labels.json) when that consolidated current-label file exists.
+- `npm run captcha:label` now defaults to `artifacts/captcha-images-current-labels.json` when that consolidated current-label file exists.
 - `npm run captcha:suggest` runs batch OCR for entries whose `expectedText` is still empty and stores the machine suggestion in `ocrText` without marking the entry as confirmed.
 - `npm run captcha:prepare-train` validates the finished labels, copies the current captcha images into `artifacts/captcha-training-current/`, writes `train.jsonl` / `val.jsonl` / `test.jsonl`, and emits a training summary with OCR baseline stats.
 - `npm run captcha:train-local` rebuilds `artifacts/captcha-training-current/`, trains a pure-Node prototype classifier, and writes the model plus prediction reports into `artifacts/captcha-model-current/`.

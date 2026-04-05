@@ -73,6 +73,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
   - one `.plist` file configured for every 2 hours
   - one install guide with `launchctl` commands
 - `schedule:launchd` must keep generated files inside the workspace and must not silently write into `~/Library/LaunchAgents`.
+- `schedule:launchd` must default to the tracked `scheduler/` directory, because `artifacts/` is reserved for ignored runtime outputs.
 
 ## 4. Rules
 
@@ -113,7 +114,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - If the command is `captcha:prepare-train`, validate the selected manifest, copy the images into a dedicated training directory, assign stable train/val/test splits, and emit an OCR baseline summary.
 - If the command is `captcha:train-local`, rebuild the current training directory, decode the copied PNG images locally, train a first character prototype model from the `train` split, and emit train/val/test evaluation summaries.
 - If the command is `diagnose-refresh`, stay on the captcha page, run refresh attempts repeatedly, and persist structured evidence about each attempt instead of collecting labels.
-- If the command is `schedule:launchd`, generate a shell script, a `.plist`, and an install guide under `artifacts/launchd/`.
+- If the command is `schedule:launchd`, generate a shell script, a `.plist`, and an install guide under `scheduler/`.
 - Captcha refresh must activate the visible `Odśwież` button with a full mouse-event sequence instead of relying on a plain DOM `click()` only.
 - The page runtime must also try the matched element's nearest actionable ancestor when triggering `Odśwież` or `Dalej`, because the live site may wrap visible text inside nested Material-style button markup.
 - Refresh target discovery must not rely only on native button selectors; it must also inspect visible text matches and their nearest actionable ancestors.
@@ -255,3 +256,4 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - 2026-04-05: added a business-layer no-slot fallback that scans normalized `bodyTextSample/bodyTextTailSample`, so final runs no longer stay at `selection_step` when the Polish reserved sentence is already visible in the captured page text.
 - 2026-04-05: added `schedule:launchd`, which generates a macOS shell script, `LaunchAgent` plist, and install guide so the single-run checker can be scheduled every 2 hours without adding an internal polling loop.
 - 2026-04-05: changed macOS desktop notification copy to Chinese, so positive hits now alert the operator with a direct “波兰签证有预约时间” message.
+- 2026-04-05: moved launchd bundle generation into the tracked `scheduler/` directory and removed legacy Playwright, Tampermonkey, camera-OCR, and stray debug-file remnants from the repository.

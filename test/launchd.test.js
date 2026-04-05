@@ -58,7 +58,7 @@ test("sanitizeLaunchdLabelPart keeps launchd-safe characters only", () => {
  * - 用户名中的特殊字符应先被清洗。
  */
 test("buildLaunchAgentLabel prefixes the sanitized username consistently", () => {
-  assert.equal(buildLaunchAgentLabel("mo.li"), "com.mo-li.poland-visa-checker");
+  assert.equal(buildLaunchAgentLabel("example.user"), "com.poland-visa-checker");
 });
 
 /**
@@ -98,17 +98,21 @@ test("escapeXml protects special characters used inside plist files", () => {
  * @returns {void} 无返回值。
  *
  * 注意：
- * - 当前默认输出目录是 `artifacts/launchd`。
+ * - 当前默认输出目录是 `scheduler/`。
  * - 默认周期是 2 小时，对应 7200 秒。
  */
-test("parseLaunchdConfig defaults to a two-hour schedule inside artifacts/launchd", () => {
+test("parseLaunchdConfig defaults to a two-hour schedule inside scheduler", () => {
   const cwd = path.resolve("/tmp/example-project");
   const config = parseLaunchdConfig(["node", "src/launchd.js"], cwd);
 
-  assert.equal(config.outDir, path.join(cwd, "artifacts/launchd"));
+  assert.equal(config.outDir, path.join(cwd, "scheduler"));
   assert.equal(config.intervalHours, 2);
   assert.equal(config.intervalSeconds, 7200);
-  assert.match(config.plistPath, /artifacts\/launchd\/com\..+\.poland-visa-checker\.plist$/);
+  assert.equal(config.label, "com.poland-visa-checker");
+  assert.equal(
+    config.plistPath,
+    path.join(cwd, "scheduler", "poland-visa-checker.launchagent.plist")
+  );
 });
 
 /**
@@ -130,14 +134,11 @@ test("parseLaunchdConfig defaults to a two-hour schedule inside artifacts/launch
  * - 脚本里不做死循环。
  */
 test("buildLaunchdShellScript points launchd to the project check command", () => {
-  const scriptText = buildLaunchdShellScript({
-    cwd: "/Users/example/poland",
-    logDir: "/Users/example/poland/artifacts/logs",
-    nodePath: "/opt/homebrew/bin/node",
-  });
+  const scriptText = buildLaunchdShellScript({});
 
-  assert.match(scriptText, /PROJECT_DIR="\/Users\/example\/poland"/);
-  assert.match(scriptText, /NODE_BIN="\/opt\/homebrew\/bin\/node"/);
+  assert.match(scriptText, /SCRIPT_DIR="\$\(cd "\$\(dirname "\$0"\)" && pwd\)"/);
+  assert.match(scriptText, /PROJECT_DIR="\$\(cd "\$SCRIPT_DIR\/\.\." && pwd\)"/);
+  assert.match(scriptText, /\/usr\/bin\/env node/);
   assert.match(scriptText, /src\/chrome-cli\.js" check/);
 });
 
@@ -161,20 +162,19 @@ test("buildLaunchdShellScript points launchd to the project check command", () =
  */
 test("buildLaunchdPlist contains a two-hour StartInterval and bundle paths", () => {
   const plistText = buildLaunchdPlist({
-    label: "com.mo-li.poland-visa-checker",
-    scriptPath: "/Users/example/poland/artifacts/launchd/run-check-every-2-hours.sh",
-    cwd: "/Users/example/poland",
-    homeDir: "/Users/example",
+    label: "com.poland-visa-checker",
     envPath: "/usr/bin:/bin",
     intervalSeconds: 7200,
-    stdoutPath: "/Users/example/poland/artifacts/logs/launchd.stdout.log",
-    stderrPath: "/Users/example/poland/artifacts/logs/launchd.stderr.log",
+    projectDirPlaceholder: "__PROJECT_DIR__",
+    stdoutPathPlaceholder: "__PROJECT_DIR__/artifacts/logs/launchd.stdout.log",
+    stderrPathPlaceholder: "__PROJECT_DIR__/artifacts/logs/launchd.stderr.log",
   });
 
-  assert.match(plistText, /<string>com\.mo-li\.poland-visa-checker<\/string>/);
+  assert.match(plistText, /<string>com\.poland-visa-checker<\/string>/);
   assert.match(plistText, /<integer>7200<\/integer>/);
   assert.match(plistText, /run-check-every-2-hours\.sh/);
   assert.match(plistText, /launchd\.stdout\.log/);
+  assert.match(plistText, /__PROJECT_DIR__/);
   assert.match(plistText, /<true\/>/);
 });
 
@@ -198,17 +198,15 @@ test("buildLaunchdPlist contains a two-hour StartInterval and bundle paths", () 
  */
 test("buildLaunchdInstallGuide prints copy, load, and inspect commands", () => {
   const guideText = buildLaunchdInstallGuide({
-    label: "com.mo-li.poland-visa-checker",
+    label: "com.poland-visa-checker",
     intervalHours: 2,
-    scriptPath: "/Users/example/poland/artifacts/launchd/run-check-every-2-hours.sh",
-    plistPath: "/Users/example/poland/artifacts/launchd/com.mo-li.poland-visa-checker.plist",
-    stdoutPath: "/Users/example/poland/artifacts/logs/launchd.stdout.log",
-    stderrPath: "/Users/example/poland/artifacts/logs/launchd.stderr.log",
+    launchAgentsPlistName: "com.poland-visa-checker.plist",
   });
 
-  assert.match(guideText, /cp ".*com\.mo-li\.poland-visa-checker\.plist" ~\/Library\/LaunchAgents\//);
-  assert.match(guideText, /launchctl load ~\/Library\/LaunchAgents\/com\.mo-li\.poland-visa-checker\.plist/);
-  assert.match(guideText, /launchctl print gui\/\$\(id -u\)\/com\.mo-li\.poland-visa-checker/);
+  assert.match(guideText, /PROJECT_DIR="\$\(cd "\$\(dirname "\$0"\)\/\.\." && pwd\)"/);
+  assert.match(guideText, /sed "s\|__PROJECT_DIR__\|\$PROJECT_DIR\|g"/);
+  assert.match(guideText, /launchctl load ~\/Library\/LaunchAgents\/com\.poland-visa-checker\.plist/);
+  assert.match(guideText, /launchctl print gui\/\$\(id -u\)\/com\.poland-visa-checker/);
 });
 
 /**
@@ -234,17 +232,16 @@ test("writeLaunchdBundle writes a complete launchd bundle inside the workspace",
   const config = {
     cwd: "/Users/example/poland",
     outDir: tempDir,
-    logDir: path.join(tempDir, "logs"),
-    label: "com.mo-li.poland-visa-checker",
-    nodePath: "/opt/homebrew/bin/node",
-    homeDir: "/Users/example",
+    label: "com.poland-visa-checker",
     intervalHours: 2,
     intervalSeconds: 7200,
     scriptPath: path.join(tempDir, "run-check-every-2-hours.sh"),
-    plistPath: path.join(tempDir, "com.mo-li.poland-visa-checker.plist"),
+    plistPath: path.join(tempDir, "poland-visa-checker.launchagent.plist"),
     installGuidePath: path.join(tempDir, "INSTALL.md"),
-    stdoutPath: path.join(tempDir, "logs/launchd.stdout.log"),
-    stderrPath: path.join(tempDir, "logs/launchd.stderr.log"),
+    projectDirPlaceholder: "__PROJECT_DIR__",
+    stdoutPathPlaceholder: "__PROJECT_DIR__/artifacts/logs/launchd.stdout.log",
+    stderrPathPlaceholder: "__PROJECT_DIR__/artifacts/logs/launchd.stderr.log",
+    launchAgentsPlistName: "com.poland-visa-checker.plist",
     envPath: "/usr/bin:/bin",
   };
 

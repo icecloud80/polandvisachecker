@@ -34,21 +34,21 @@ function sanitizeLaunchdLabelPart(value) {
  * 构造默认的 launchd Agent label。
  *
  * 为什么这样写：
- * 用户只需要“每 2 小时自动跑一次”的现成方案。
- * 用固定前后缀加用户名片段生成 label，可以让默认值直接可用，也尽量避免多项目冲突。
+ * 用户要求把仓库里的个人目录和用户名信息全部去掉。
+ * 因此这里改成固定的通用 label，避免生成文件时把本机用户名写进可提交内容。
  *
  * 输入：
- * @param {string} username - 当前系统用户名。
+ * @param {string} _username - 预留参数，当前不参与 label 生成。
  *
  * 输出：
  * @returns {string} 默认 launchd Agent label。
  *
  * 注意：
- * - 默认格式为 `com.<user>.poland-visa-checker`。
- * - 若未来项目名变化，文档和测试需要同步更新。
+ * - 当前固定为 `com.poland-visa-checker`。
+ * - 若未来需要多实例安装，应新增显式实例名参数，而不是回到用户名拼接。
  */
-function buildLaunchAgentLabel(username) {
-  return `com.${sanitizeLaunchdLabelPart(username)}.poland-visa-checker`;
+function buildLaunchAgentLabel(_username) {
+  return "com.poland-visa-checker";
 }
 
 /**
@@ -99,7 +99,7 @@ function escapeXml(value) {
  */
 function parseLaunchdConfig(argv, cwd) {
   const args = Array.isArray(argv) ? [...argv.slice(2)] : [];
-  let outDir = path.resolve(cwd, "artifacts/launchd");
+  let outDir = path.resolve(cwd, "scheduler");
   let intervalHours = 2;
 
   for (let index = 0; index < args.length; index += 1) {
@@ -119,26 +119,24 @@ function parseLaunchdConfig(argv, cwd) {
 
   const normalizedIntervalHours = Number.isFinite(intervalHours) && intervalHours > 0 ? intervalHours : 2;
   const label = buildLaunchAgentLabel(os.userInfo().username);
-  const logDir = path.resolve(cwd, "artifacts/logs");
   const scriptPath = path.join(outDir, "run-check-every-2-hours.sh");
-  const plistPath = path.join(outDir, `${label}.plist`);
+  const plistPath = path.join(outDir, "poland-visa-checker.launchagent.plist");
   const installGuidePath = path.join(outDir, "INSTALL.md");
 
   return {
     cwd,
     outDir,
-    logDir,
     label,
-    nodePath: process.execPath,
-    homeDir: os.homedir(),
     intervalHours: normalizedIntervalHours,
     intervalSeconds: Math.round(normalizedIntervalHours * 60 * 60),
     scriptPath,
     plistPath,
     installGuidePath,
-    stdoutPath: path.join(logDir, "launchd.stdout.log"),
-    stderrPath: path.join(logDir, "launchd.stderr.log"),
-    envPath: process.env.PATH || "",
+    projectDirPlaceholder: "__PROJECT_DIR__",
+    stdoutPathPlaceholder: "__PROJECT_DIR__/artifacts/logs/launchd.stdout.log",
+    stderrPathPlaceholder: "__PROJECT_DIR__/artifacts/logs/launchd.stderr.log",
+    launchAgentsPlistName: `${label}.plist`,
+    envPath: "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
   };
 }
 
@@ -158,7 +156,7 @@ function parseLaunchdConfig(argv, cwd) {
  *
  * 注意：
  * - 脚本内部只执行一次 `check`，不做死循环。
- * - 若仓库目录移动，需要重新生成这份脚本。
+ * - 脚本会根据自身所在目录反推项目根目录，因此内容里不应硬编码个人绝对路径。
  */
 function buildLaunchdShellScript(config) {
   return `#!/bin/zsh
@@ -179,19 +177,19 @@ function buildLaunchdShellScript(config) {
  *
  * 注意：
  * - 这里调用的是单次 \`check\`，不在脚本里重复调度。
- * - 若项目目录或 Node 路径变化，需要重新生成这份脚本。
+ * - 通过脚本自身位置推导项目根目录，避免把个人目录写进仓库文件。
  */
 DOC
 
 set -eu
 
-PROJECT_DIR="${config.cwd}"
-LOG_DIR="${config.logDir}"
-NODE_BIN="${config.nodePath}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+LOG_DIR="$PROJECT_DIR/artifacts/logs"
 
 mkdir -p "$LOG_DIR"
 cd "$PROJECT_DIR"
-"$NODE_BIN" "$PROJECT_DIR/src/chrome-cli.js" check
+/usr/bin/env node "$PROJECT_DIR/src/chrome-cli.js" check
 `;
 }
 
@@ -212,8 +210,17 @@ cd "$PROJECT_DIR"
  * 注意：
  * - 当前默认 `RunAtLoad` 为 true，方便安装后立刻验证。
  * - `StartInterval` 以秒为单位，默认每 7200 秒执行一次。
+ * - plist 模板保留 `__PROJECT_DIR__` 占位符，安装时再替换成当前机器上的真实路径。
  */
 function buildLaunchdPlist(config) {
+  const projectDirPlaceholder = String(config.projectDirPlaceholder || "__PROJECT_DIR__");
+  const stdoutPathPlaceholder = String(
+    config.stdoutPathPlaceholder || `${projectDirPlaceholder}/artifacts/logs/launchd.stdout.log`
+  );
+  const stderrPathPlaceholder = String(
+    config.stderrPathPlaceholder || `${projectDirPlaceholder}/artifacts/logs/launchd.stderr.log`
+  );
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -222,14 +229,12 @@ function buildLaunchdPlist(config) {
   <string>${escapeXml(config.label)}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${escapeXml(config.scriptPath)}</string>
+    <string>${escapeXml(`${projectDirPlaceholder}/scheduler/run-check-every-2-hours.sh`)}</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>${escapeXml(config.cwd)}</string>
+  <string>${escapeXml(projectDirPlaceholder)}</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>HOME</key>
-    <string>${escapeXml(config.homeDir)}</string>
     <key>PATH</key>
     <string>${escapeXml(config.envPath)}</string>
   </dict>
@@ -238,9 +243,9 @@ function buildLaunchdPlist(config) {
   <key>StartInterval</key>
   <integer>${escapeXml(config.intervalSeconds)}</integer>
   <key>StandardOutPath</key>
-  <string>${escapeXml(config.stdoutPath)}</string>
+  <string>${escapeXml(stdoutPathPlaceholder)}</string>
   <key>StandardErrorPath</key>
-  <string>${escapeXml(config.stderrPath)}</string>
+  <string>${escapeXml(stderrPathPlaceholder)}</string>
 </dict>
 </plist>
 `;
@@ -262,43 +267,49 @@ function buildLaunchdPlist(config) {
  *
  * 注意：
  * - 安装目录仍然是用户自己的 home 目录，不在仓库内直接写入。
- * - 若后续实际安装 label 改名，这里的命令也必须同步更新。
+ * - 安装时通过 `sed` 把模板里的 `__PROJECT_DIR__` 替换成当前仓库绝对路径。
  */
 function buildLaunchdInstallGuide(config) {
+  const launchAgentsPlistName = String(config.launchAgentsPlistName || `${config.label}.plist`);
+
   return `# launchd Install Guide
 
 This bundle runs the Poland visa checker every ${config.intervalHours} hours on macOS.
 
 ## Generated Files
 
-- Script: \`${config.scriptPath}\`
-- Plist: \`${config.plistPath}\`
-- Stdout log: \`${config.stdoutPath}\`
-- Stderr log: \`${config.stderrPath}\`
+- Script template: \`scheduler/run-check-every-2-hours.sh\`
+- Plist template: \`scheduler/poland-visa-checker.launchagent.plist\`
+- Stdout log after install: \`artifacts/logs/launchd.stdout.log\`
+- Stderr log after install: \`artifacts/logs/launchd.stderr.log\`
 
 ## Install
 
 \`\`\`bash
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PLIST_TMP="$PROJECT_DIR/scheduler/.poland-visa-checker.launchagent.generated.plist"
+sed "s|__PROJECT_DIR__|$PROJECT_DIR|g" "$PROJECT_DIR/scheduler/poland-visa-checker.launchagent.plist" > "$PLIST_TMP"
 mkdir -p ~/Library/LaunchAgents
-cp "${config.plistPath}" ~/Library/LaunchAgents/${config.label}.plist
-launchctl unload ~/Library/LaunchAgents/${config.label}.plist 2>/dev/null || true
-launchctl load ~/Library/LaunchAgents/${config.label}.plist
+cp "$PLIST_TMP" ~/Library/LaunchAgents/${launchAgentsPlistName}
+launchctl unload ~/Library/LaunchAgents/${launchAgentsPlistName} 2>/dev/null || true
+launchctl load ~/Library/LaunchAgents/${launchAgentsPlistName}
 launchctl kickstart -k gui/$(id -u)/${config.label}
 \`\`\`
 
 ## Inspect Status
 
 \`\`\`bash
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 launchctl print gui/$(id -u)/${config.label}
-tail -f "${config.stdoutPath}"
-tail -f "${config.stderrPath}"
+tail -f "$PROJECT_DIR/artifacts/logs/launchd.stdout.log"
+tail -f "$PROJECT_DIR/artifacts/logs/launchd.stderr.log"
 \`\`\`
 
 ## Remove
 
 \`\`\`bash
-launchctl unload ~/Library/LaunchAgents/${config.label}.plist
-rm -f ~/Library/LaunchAgents/${config.label}.plist
+launchctl unload ~/Library/LaunchAgents/${launchAgentsPlistName}
+rm -f ~/Library/LaunchAgents/${launchAgentsPlistName}
 \`\`\`
 `;
 }
@@ -320,10 +331,10 @@ rm -f ~/Library/LaunchAgents/${config.label}.plist
  * 注意：
  * - 这里只写仓库内文件，不直接修改 `~/Library/LaunchAgents`。
  * - shell 脚本会被赋予可执行权限。
+ * - 生成结果应保持无个人目录信息，方便纳入 git。
  */
 function writeLaunchdBundle(config) {
   fs.mkdirSync(config.outDir, { recursive: true });
-  fs.mkdirSync(config.logDir, { recursive: true });
 
   fs.writeFileSync(config.scriptPath, buildLaunchdShellScript(config));
   fs.chmodSync(config.scriptPath, 0o755);
@@ -335,8 +346,8 @@ function writeLaunchdBundle(config) {
     scriptPath: config.scriptPath,
     plistPath: config.plistPath,
     installGuidePath: config.installGuidePath,
-    stdoutPath: config.stdoutPath,
-    stderrPath: config.stderrPath,
+    stdoutPath: config.stdoutPathPlaceholder,
+    stderrPath: config.stderrPathPlaceholder,
     intervalHours: config.intervalHours,
   };
 }
@@ -360,15 +371,20 @@ function writeLaunchdBundle(config) {
  * - 若未来增加自动安装模式，应与这个只生成模式保持分离。
  */
 function printLaunchdBundleResult(result) {
+  const relativeScriptPath = path.relative(process.cwd(), result.scriptPath) || result.scriptPath;
+  const relativePlistPath = path.relative(process.cwd(), result.plistPath) || result.plistPath;
+  const relativeInstallGuidePath =
+    path.relative(process.cwd(), result.installGuidePath) || result.installGuidePath;
+
   console.log(
     JSON.stringify(
       {
         ok: true,
         label: result.label,
         intervalHours: result.intervalHours,
-        scriptPath: result.scriptPath,
-        plistPath: result.plistPath,
-        installGuidePath: result.installGuidePath,
+        scriptPath: relativeScriptPath,
+        plistPath: relativePlistPath,
+        installGuidePath: relativeInstallGuidePath,
         stdoutPath: result.stdoutPath,
         stderrPath: result.stderrPath,
       },
@@ -378,8 +394,8 @@ function printLaunchdBundleResult(result) {
   );
   console.log("");
   console.log("Next:");
-  console.log(`1. Read ${result.installGuidePath}`);
-  console.log(`2. Copy ${result.plistPath} to ~/Library/LaunchAgents/`);
+  console.log(`1. Read ${relativeInstallGuidePath}`);
+  console.log(`2. Copy ${relativePlistPath} to ~/Library/LaunchAgents/`);
   console.log(`3. Load it with launchctl`);
 }
 
@@ -399,7 +415,7 @@ function printLaunchdBundleResult(result) {
  *
  * 注意：
  * - 当前只生成文件，不会自动安装到系统目录。
- * - 默认输出到 `artifacts/launchd/`。
+ * - 默认输出到 `scheduler/`。
  */
 function main(argv) {
   const config = parseLaunchdConfig(argv, process.cwd());

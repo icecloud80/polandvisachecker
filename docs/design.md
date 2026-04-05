@@ -4,6 +4,7 @@
 
 - `src/chrome-cli.js`: the primary v1 entrypoint for `doctor`, `check`, `debug`, `collect-captcha`, and `diagnose-refresh`
 - `src/launchd.js`: bundle generator for a 2-hour macOS `launchd` wrapper around the single-run checker
+- `scheduler/`: tracked home for generated `launchd` install files, distinct from ignored runtime `artifacts/`
 - `src/captcha-labeler.js`: lightweight local web server that turns `labels.json` into a one-image-at-a-time labeling UI
 - `src/captcha-suggest.js`: batch OCR suggester that fills `ocrText` for unlabeled captcha entries
 - `src/captcha-training.js`: training export tool that validates confirmed labels and writes a stable train/val/test dataset
@@ -46,7 +47,7 @@
 17. If the command is `captcha:suggest`, the OCR suggester scans unlabeled entries, writes `ocrText` and confidence metadata into the manifest, and leaves human confirmation to the labeler.
 18. If the command is `captcha:prepare-train`, the training exporter validates the manifest, copies images into a training directory, assigns deterministic splits, and writes summary plus JSONL files.
 19. If the command is `captcha:train-local`, the local trainer rebuilds the training directory, decodes PNG captchas, extracts 4 glyph vectors per image, trains a character prototype model from the train split, and writes summary plus per-split prediction reports.
-20. If the command is `schedule:launchd`, the generator writes a shell script, a `.plist`, and an `INSTALL.md` guide into `artifacts/launchd/` so macOS can call the single-run `check` every 2 hours.
+20. If the command is `schedule:launchd`, the generator writes a shell script, a `.plist`, and an `INSTALL.md` guide into `scheduler/` so macOS can call the single-run `check` every 2 hours.
 
 ## 3. Rule Mapping
 
@@ -153,7 +154,10 @@
   Design: `src/status.js` now re-checks `bodyTextSample` and `bodyTextTailSample` for the normalized Polish reserved sentence before falling back to `selection_step`.
 
 - Rule: the generated schedule files must stay reviewable before installation.
-  Design: `src/launchd.js` writes all generated artifacts into `artifacts/launchd/` first, including an `INSTALL.md` guide, and leaves the actual copy into `~/Library/LaunchAgents` as an explicit user step.
+  Design: `src/launchd.js` writes all generated artifacts into `scheduler/` first, including an `INSTALL.md` guide, and leaves the actual copy into `~/Library/LaunchAgents` as an explicit user step.
+
+- Rule: repository cleanup should remove dead implementation branches once the Chrome CLI path becomes canonical.
+  Design: the repo now keeps only the current Chrome CLI, labeling, training, notification, and launchd generator files; legacy Playwright, Tampermonkey, and camera-OCR code paths were removed.
 
 ## 4. Captcha Design
 
