@@ -1,0 +1,26 @@
+{
+  "name": "poland-visa-checker",
+  "version": "0.1.0",
+  "description": "Single-run Mac CLI for checking Polish Schengen visa availability in Los Angeles via real Google Chrome.",
+  "type": "commonjs",
+  "main": "src/chrome-cli.js",
+  "scripts": {
+    "doctor": "node src/chrome-cli.js doctor",
+    "check": "node src/chrome-cli.js check",
+    "debug": "node src/chrome-cli.js debug",
+    "captcha:collect": "node src/chrome-cli.js collect-captcha",
+    "captcha:label": "node src/captcha-labeler.js",
+    "captcha:suggest": "node src/captcha-suggest.js",
+    "captcha:prepare-train": "node src/captcha-training.js",
+    "captcha:diagnose-refresh": "node src/chrome-cli.js diagnose-refresh",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "playwright": "^1.55.0",
+    "tesseract.js": "^6.0.1"
+  }
+}

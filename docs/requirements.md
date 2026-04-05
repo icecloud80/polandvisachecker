@@ -1,0 +1,194 @@
+# Requirement Document
+
+## 1. Goal
+
+Build a single-run local tool that checks whether the Polish e-Konsulat Schengen visa flow for Los Angeles exposes any selectable appointment dates.
+
+## 2. User Story
+
+- As a visa applicant, I want one command to drive the real Chrome flow so I do not need to click through the same steps manually.
+- As a visa applicant, I want OCR to keep pushing captcha attempts automatically so the CLI does not stop for manual intervention.
+- As a visa applicant, I want a clear machine-readable result that tells me whether dates exist, all dates are reserved, or the page is blocked.
+
+## 3. Functional Requirements
+
+- Open real Google Chrome on macOS.
+- Navigate directly to `https://secure.e-konsulat.gov.pl/placowki/126/wiza-schengen/wizyty/weryfikacja-obrazkowa`.
+- Detect whether the current page is:
+  - captcha step
+  - post-captcha selection step
+  - anti-bot challenge
+  - date-available state
+  - all-dates-reserved state
+- Extract the captcha image from the page.
+- Extract both the raw captcha image and at least one alternate processed captcha capture from the page.
+- Save the captcha image into `artifacts/`.
+- Run local OCR for the captcha.
+- Constrain OCR cleanup to the known captcha alphabet: letters, digits, `@`, `#`, `+`, and `=`.
+- Prefer OCR candidates that resolve to exactly 4 characters.
+- Re-run OCR on the same captcha before switching to the alternate processed capture.
+- Automatically submit the OCR guess only when OCR resolves to exactly 4 allowed captcha characters.
+- If OCR still cannot produce 4 characters after raw and processed retries, refresh the captcha and retry automatically.
+- Fill the `Characters from image` field and submit `Dalej`.
+- Select `Rodzaj usługi = Wiza Schengen`.
+- Select `Lokalizacja = Los Angeles`.
+- Select `Chcę zarezerwować termin dla = 1 osob`.
+- Read the `Termin` field after the selections settle.
+- Mark the result as available when `Termin` contains at least one real selectable date.
+- Mark the result as unavailable when the page shows:
+  `Chwilowo wszystkie udostępnione terminy zostały zarezerwowane, prosimy spróbować umówić wizytę w terminie późniejszym`
+- Print compact JSON with `checkedAt`, `isAvailable`, `reason`, `availableDateCount`, `optionTexts`, and `pageUrl`.
+- Support `doctor`, `check`, `debug`, and `collect-captcha` commands.
+- Support a `captcha:label` command that opens a local one-image-at-a-time labeling UI on top of `labels.json`.
+- Support a `captcha:suggest` command that batch-runs OCR for unlabeled captcha entries and writes machine suggestions back into the manifest.
+- Support a `captcha:prepare-train` command that validates the finished labels and exports a training-ready dataset directory.
+- Support a `diagnose-refresh` command dedicated to Phase A refresh investigation.
+- Keep desktop notification support for positive hits.
+- `collect-captcha` must save a batch of captcha images for later manual labeling.
+- `collect-captcha` must write a `labels.json` manifest with blank `expectedText` fields.
+- `collect-captcha` must record per-sample provenance fields such as `signatureHash`, `refreshMethod`, `refreshContext`, and `refreshRecordPath`.
+- `collect-captcha` must write a batch `summary.json` file with saved-count, unique-signature, duplicate-skip, and refresh-method statistics.
+- `captcha:label` must default to `artifacts/captcha-images-current-labels.json` when that consolidated current-label file exists, and only then fall back to the newest available dataset or raw collection manifest.
+- `captcha:label` must display one captcha image at a time, allow updating `expectedText`, and support a save-and-next interaction without manually editing JSON.
+- `captcha:suggest` must only populate suggestion fields such as `ocrText`, `ocrConfidence`, and OCR attempt metadata; it must not overwrite confirmed `expectedText`.
+- `captcha:prepare-train` must fail fast if any image is missing or any label is empty / non-4-character.
+- `captcha:prepare-train` must export copied images plus `all.jsonl`, `train.jsonl`, `val.jsonl`, `test.jsonl`, and `summary.json`.
+- `collect-captcha` must confirm the captcha image has changed after refresh before counting the next sample.
+- `diagnose-refresh` must write a per-attempt JSON record plus before/after captcha images for each refresh attempt.
+- `diagnose-refresh` must write a batch `summary.json` file with changed-image counts and record paths.
+- `diagnose-refresh` must also persist the broader list of visible refresh-text candidates, their actionable ancestors, and click points so selector misses can be diagnosed from artifacts.
+- When refresh-text candidates are empty, `diagnose-refresh` must still persist the visible actionable controls and their search texts so regex and hidden-character issues can be diagnosed offline.
+
+## 4. Rules
+
+- This version must use real Google Chrome, not Playwright-first automation.
+- This version must be single-run only; polling and every-2-hours scheduling are out of scope.
+- OCR is assistive only and must auto-submit valid 4-character results without blocking on manual help.
+- OCR cleaning must preserve visible captcha symbols such as `@`, `+`, and `=` instead of stripping them.
+- OCR should aggressively target a 4-character result, because the live captcha length is fixed at 4.
+- Captcha dataset collection must not submit forms or leave the captcha page intentionally.
+- Captcha labeling must preserve symbol characters such as `@`, `#`, `+`, and `=` in manual input.
+- Captcha suggestion generation must preserve symbol characters such as `@`, `#`, `+`, and `=` in OCR outputs.
+- The tool must prioritize the fixed Los Angeles Schengen path only.
+- The tool must support both native `select` controls and custom combobox/listbox widgets.
+- Date-option evidence is stronger than message-text evidence.
+- When no strong evidence exists, the tool must return a conservative non-available result.
+- The tool must preserve explicit page-stage reasons such as `captcha_step`, `selection_step`, and `imperva_challenge`.
+
+## 5. Logic
+
+- Start on the fixed Schengen captcha URL.
+- If the page is still at captcha, run OCR against the raw captcha capture first.
+- If raw OCR does not yield a solid 4-character candidate, re-run OCR and then switch to the alternate processed capture.
+- Submit the current OCR guess immediately without waiting for terminal input, but only when it is a 4-character candidate.
+- If the captcha is rejected, capture the refreshed image and retry automatically.
+- If captcha success returns to the registration home, reopen the fixed Schengen URL.
+- If the command is `collect-captcha`, stay on the captcha page, save the current captcha image set, refresh, and repeat until the requested sample count is reached.
+- During `collect-captcha`, if refresh does not change the captcha image yet, keep waiting or retry refreshing instead of saving a duplicate sample.
+- During `collect-captcha`, each saved sample must inherit the provenance of the refresh step that produced it, so later labeling can distinguish initial-load images from DOM-refresh or real-click images.
+- If the command is `captcha:label`, start a local browser UI over the selected `labels.json`, show the current image, save the current label, and move to the next image on demand.
+- If the command is `captcha:suggest`, batch-run OCR only for entries whose `expectedText` is empty, persist the suggestion under `ocrText`, and leave final confirmation to the labeler UI.
+- If the command is `captcha:prepare-train`, validate the selected manifest, copy the images into a dedicated training directory, assign stable train/val/test splits, and emit an OCR baseline summary.
+- If the command is `diagnose-refresh`, stay on the captcha page, run refresh attempts repeatedly, and persist structured evidence about each attempt instead of collecting labels.
+- Captcha refresh must activate the visible `Odśwież` button with a full mouse-event sequence instead of relying on a plain DOM `click()` only.
+- The page runtime must also try the matched element's nearest actionable ancestor when triggering `Odśwież` or `Dalej`, because the live site may wrap visible text inside nested Material-style button markup.
+- Refresh target discovery must not rely only on native button selectors; it must also inspect visible text matches and their nearest actionable ancestors.
+- Refresh target discovery must tolerate Unicode/diacritic variants and duplicated button text emitted by the live Angular/Material markup.
+- If DOM-triggered refresh still fails, the tool must read the refresh control's screen position and fall back to a real macOS mouse click.
+- Even after a refresh attempt, `collect-captcha` must refuse to count or save a sample if the captcha signature is still unchanged.
+- The real-click fallback may require macOS Accessibility permission for the terminal or Codex app, and the tool should surface that setup hint when the fallback cannot run.
+- If the page is on the post-captcha selection step, fill the three dropdowns in order:
+  - service
+  - location
+  - people count
+- After the selections settle:
+  - if `Termin` has real options, return available
+  - else if the exact Polish reserved message is present, return unavailable
+  - else return the current page-stage reason or `unknown_or_waiting`
+
+## 6. AI Strategy
+
+- Use OCR only as a convenience layer for captcha entry.
+- Prefer deterministic DOM evidence over OCR or heuristic guesses.
+- Prefer direct navigation to the known path over menu clicking.
+- Prefer a real Chrome session over automation-only browsers because anti-bot risk is lower.
+- Treat symbol-bearing captcha strings as first-class valid OCR outputs when they match the expected length.
+- Use collected captcha datasets as the foundation for any future supervised OCR training.
+- Treat dataset provenance as first-class evidence, because OCR training quality depends on knowing whether a sample came from a true refresh, a reopen, or an unchanged-image retry.
+- Treat the one-image-at-a-time labeling UI as the default annotation path, because manual JSON editing is too slow for hundreds of captcha samples.
+- Treat OCR suggestions as accelerators for manual labeling, not as confirmed labels.
+- Treat the post-label export as the start of model work, because a stable train/val/test directory is more important than training code coupled to the labeler format.
+- Treat refresh diagnostics as the prerequisite evidence layer before changing OCR or model strategy again.
+- Treat refresh-candidate enumeration as the first Phase A debugging surface, because a visible `Odśwież` label does not guarantee the current selector points at the real interactive node.
+- When refresh-candidate enumeration returns nothing, treat the actionable-control dump as the next debugging surface before changing click strategy again.
+
+## 7. AI Heuristic
+
+- Treat OCR output length and symbols as observability signals, and require 4 allowed characters before submission.
+- Prefer exact 4-character OCR candidates over longer noisy strings.
+- Auto-submit OCR output for every attempt, including weak guesses and symbol-bearing guesses.
+- Detect unavailable state using the exact Polish sentence, with English fallback kept only as compatibility.
+
+## 8. Roadmap
+
+- Add polling after the single-run flow is stable.
+- Add every-2-hours scheduling after polling is accepted.
+- Add structured notification templates for Telegram, Discord, Slack, and ntfy.
+- Improve captcha preprocessing before OCR.
+- Add OCR confidence scoring so the symbol-preserving 4-character rule is not the only submit heuristic.
+- Add more processed capture variants if the current raw-plus-threshold pair is still unstable.
+- Add richer debug artifact capture for selector failures and anti-bot states.
+- Add a lightweight local labeling UI on top of `labels.json`.
+- Add keyboard shortcuts and filtering to the labeling UI after the basic sequential flow is stable.
+- Add a “skip to next unlabeled with no OCR suggestion” mode if OCR coverage becomes uneven.
+- Add a first-pass local training script after the training export format is confirmed stable.
+- Add a dataset browser that reads both `labels.json` and `summary.json`, so labeling can prioritize the cleanest runs first.
+- Turn the refresh diagnostic JSON into a small analysis report that clusters failures by method, target element, and tab-loss behavior.
+- If refresh target discovery remains unstable, add a selector-analysis report that clusters failures by matched node type, actionable ancestor type, and click-point availability.
+
+## 9. UI Improvements
+
+### Mobile
+
+- Not applicable in v1 because this deliverable is a macOS CLI.
+
+### PC
+
+- Keep normal `check` output compact and machine-readable.
+- Keep `debug` output verbose for troubleshooting.
+- Save captcha images into `artifacts/` so the user can inspect them outside the terminal.
+- Save collected captcha samples into per-run directories so the operator can label them batch by batch.
+- Save per-run captcha summaries so the operator can quickly judge dataset quality before opening the full manifest.
+- Make the labeling UI favor uninterrupted sequential entry: image on the left, answer field on the right, save-and-next as the primary action.
+- Save refresh diagnostics into per-run directories so the operator can compare JSON evidence with before/after captcha images.
+- Keep refresh candidate metadata readable in JSON so the operator can compare “visible label node” and “real clickable ancestor” without inspecting the DOM live.
+
+## 10. Bug Fix List
+
+- 2026-04-03: removed watch-mode-first positioning from the main CLI contract.
+- 2026-04-03: simplified the runtime to real Chrome single-run flow for Los Angeles only.
+- 2026-04-03: removed old country and office selection from the post-captcha flow.
+- 2026-04-03: added explicit support for Polish field labels used by the live flow.
+- 2026-04-03: added exact Polish reserved-message detection for vacancy inference.
+- 2026-04-03: changed normal `check` output to compact JSON instead of debug-heavy dumps.
+- 2026-04-03: preserved detailed page-stage reasons such as `selection_step` and `imperva_challenge`.
+- 2026-04-04: changed captcha handling to OCR-first auto-submit instead of prompting for confirmation on every attempt.
+- 2026-04-04: fixed OCR captcha cleaning so real symbol characters like `@`, `+`, and `=` are preserved instead of stripped.
+- 2026-04-04: removed terminal-based captcha fallback from `check`, so captcha handling now stays fully automated.
+- 2026-04-04: added a two-stage OCR flow that retries the raw capture and then switches to a processed captcha capture before submission.
+- 2026-04-04: stopped submitting blank or non-4-character OCR results; the CLI now refreshes captcha automatically when OCR still cannot resolve 4 characters.
+- 2026-04-04: added `collect-captcha` mode to batch-save captcha images plus a blank labeling manifest for later annotation.
+- 2026-04-04: fixed `collect-captcha` to wait for an actual captcha image change after refresh, preventing duplicate sample batches.
+- 2026-04-05: changed captcha refresh to trigger the live `Odśwież` button with the same stronger mouse-event sequence used for custom controls, because plain `click()` did not reliably refresh the image.
+- 2026-04-05: fixed `collect-captcha` to skip saving when the captcha signature is still unchanged after refresh, so duplicate images no longer leak into the dataset.
+- 2026-04-05: added a shared page activation path that triggers both the visible control and its nearest actionable ancestor, improving `Odśwież` and `Dalej` clicks on nested button markup.
+- 2026-04-05: added a real-pointer captcha refresh fallback that reads the `Odśwież` screen coordinates from the page and uses a macOS mouse click when DOM refresh is ignored.
+- 2026-04-05: added a dedicated `diagnose-refresh` Phase A mode that records refresh method, target element metadata, and before/after captcha evidence for each attempt.
+- 2026-04-05: widened refresh target discovery so diagnostics now enumerate visible refresh-text matches, their actionable ancestors, and click points instead of only checking native button selectors.
+- 2026-04-05: added a raw actionable-control dump to refresh diagnostics so Phase A can inspect live button search texts even when no refresh candidate matches the current pattern.
+- 2026-04-05: hardened refresh-text matching against Unicode/diacritic variants and duplicated button text after diagnostics showed live controls like `Odśwież` exposing repeated search strings.
+- 2026-04-05: added per-sample provenance metadata and per-run collection summaries so Phase A datasets can be filtered by unique signatures and refresh source before labeling.
+- 2026-04-05: added a local `captcha:label` UI so captcha annotation now happens as a sequential image-input-next workflow instead of manual JSON editing.
+- 2026-04-05: changed `captcha:label` to prioritize the consolidated current label manifest, so the default labeling target now matches the cleaned image folder the user actually works from.
+- 2026-04-05: added `captcha:suggest` plus `ocrText` prefill so unlabeled captcha entries now open with an OCR default value that the user can confirm or correct.
+- 2026-04-05: added `captcha:prepare-train` so the fully labeled captcha set can now be exported into a deterministic train/val/test directory with OCR baseline metrics.
