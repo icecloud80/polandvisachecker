@@ -101,6 +101,9 @@
 - Rule: normal operation should produce compact output.
   Design: `check` prints only the compact status JSON, while `debug` prints the full normalized snapshot.
 
+- Rule: positive-hit desktop notifications should be readable at a glance by the local operator.
+  Design: `src/notifier.js` now emits concise Chinese notification copy for both macOS desktop alerts and any reused webhook payloads.
+
 - Rule: captcha dataset collection should support later manual labeling.
   Design: `collect-captcha` writes a per-run dataset directory with image files and a `labels.json` template.
 
@@ -205,6 +208,7 @@
 - If the runtime still cannot point at a usable refresh control, the diagnostic record should preserve all matched refresh candidates so selector misses can be analyzed offline.
 - If the runtime still cannot match any refresh candidate, the diagnostic record should preserve the visible actionable controls so Phase A can inspect search texts and hidden-character issues directly from artifacts.
 - If the user wants every-2-hours automation, the project should generate but not auto-install a `launchd` bundle, because writing directly into `~/Library/LaunchAgents` is a system-level choice better left explicit.
+- If a desktop notification fires on a scheduled run, the alert text should stay short enough for the macOS banner and should not depend on the terminal being open.
 
 ## 7. Testing Strategy
 

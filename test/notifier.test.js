@@ -29,9 +29,10 @@ test("buildNotificationPayload returns success copy for available dates", () => 
     },
   });
 
-  assert.match(payload.title, /slot found/i);
-  assert.match(payload.body, /los angeles/i);
-  assert.match(payload.body, /3 option/);
+  assert.equal(payload.title, "波兰签证有预约时间");
+  assert.match(payload.body, /洛杉矶/);
+  assert.match(payload.body, /3/);
+  assert.match(payload.body, /可预约时间/);
 });
 
 /**
@@ -60,6 +61,7 @@ test("buildNotificationPayload returns no-slot copy for unavailable dates", () =
     },
   });
 
-  assert.match(payload.title, /check completed/i);
+  assert.equal(payload.title, "波兰签证检查完成");
+  assert.match(payload.body, /暂时没有预约时间/);
   assert.match(payload.body, /all_dates_reserved/);
 });

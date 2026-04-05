@@ -24,14 +24,14 @@ const execFileAsync = promisify(execFile);
 function buildNotificationPayload(result) {
   if (result.status.isAvailable) {
     return {
-      title: "Poland visa slot found",
-      body: `Dates are available for Los Angeles. Detected ${result.status.availableDateCount} option(s).`,
+      title: "波兰签证有预约时间",
+      body: `洛杉矶检测到 ${result.status.availableDateCount} 个可预约时间，请尽快查看。`,
     };
   }
 
   return {
-    title: "Poland visa check completed",
-    body: `No slots yet. Reason: ${result.status.reason}.`,
+    title: "波兰签证检查完成",
+    body: `暂时没有预约时间。原因：${result.status.reason}。`,
   };
 }
 

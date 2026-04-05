@@ -172,7 +172,7 @@ npm test
 - Post-captcha snapshots now also include `selectionLabelEvidence`, so the CLI can stop captcha retries as soon as the next-step labels are visible.
 - The post-captcha selector runtime now falls back to the visible vertical order of the four `mat-select` controls when the live page does not expose usable label text around each dropdown.
 - Final “all reserved” detection now also falls back to normalized `bodyTextSample/bodyTextTailSample`, so the Polish result is still recognized even when runtime-level `unavailabilityText` is temporarily empty.
-- Positive hits still use desktop notification support when enabled.
+- Positive hits still use macOS desktop notification support when enabled, and the notification copy is now Chinese.
 - Debug mode is intentionally verbose; normal `check` output is intentionally compact.
 - `npm run schedule:launchd` writes a shell script, a `.plist`, and an `INSTALL.md` guide into `artifacts/launchd/`.
 - The generated `launchd` bundle does not install itself automatically; you still copy the `.plist` into `~/Library/LaunchAgents/` when you are ready.

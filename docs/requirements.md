@@ -51,6 +51,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Support a `captcha:train-local` command that prepares the current labeled dataset, trains a first local classifier, and writes model plus prediction artifacts.
 - Support a `diagnose-refresh` command dedicated to Phase A refresh investigation.
 - Keep desktop notification support for positive hits.
+- Positive-hit macOS notifications must use Chinese copy so the operator can react immediately without reading English system alerts.
 - `collect-captcha` must save a batch of captcha images for later manual labeling.
 - `collect-captcha` must write a `labels.json` manifest with blank `expectedText` fields.
 - `collect-captcha` must record per-sample provenance fields such as `signatureHash`, `refreshMethod`, `refreshContext`, and `refreshRecordPath`.
@@ -160,6 +161,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Treat normalized reserved-message matching as a required heuristic, because the live page can visually show the final state while raw DOM text still differs in whitespace or Unicode composition.
 - Treat `bodyTextSample/bodyTextTailSample` as the final no-slot fallback, because the live final page can visually show the result even when the explicit unavailable field was not captured in that exact snapshot.
 - Treat macOS `launchd` as the simplest recurring wrapper for this project, because the checker already depends on a local Chrome session and Apple Events permissions.
+- Treat positive-hit notifications as high-priority operator alerts, so the default desktop copy should be short, direct, and localized in Chinese.
 - Treat refresh diagnostics as the prerequisite evidence layer before changing OCR or model strategy again.
 - Treat refresh-candidate enumeration as the first Phase A debugging surface, because a visible `Odśwież` label does not guarantee the current selector points at the real interactive node.
 - When refresh-candidate enumeration returns nothing, treat the actionable-control dump as the next debugging surface before changing click strategy again.
@@ -252,3 +254,4 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - 2026-04-05: hardened final no-slot detection so the Polish reserved sentence is recognized even when the live page wraps it across lines or emits different Unicode spacing/diacritic forms.
 - 2026-04-05: added a business-layer no-slot fallback that scans normalized `bodyTextSample/bodyTextTailSample`, so final runs no longer stay at `selection_step` when the Polish reserved sentence is already visible in the captured page text.
 - 2026-04-05: added `schedule:launchd`, which generates a macOS shell script, `LaunchAgent` plist, and install guide so the single-run checker can be scheduled every 2 hours without adding an internal polling loop.
+- 2026-04-05: changed macOS desktop notification copy to Chinese, so positive hits now alert the operator with a direct “波兰签证有预约时间” message.
