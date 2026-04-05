@@ -333,7 +333,7 @@ async function clickChromeScreenPoint(screenPoint, url) {
  * 生成“准备 Chrome 标签页并导航到目标网址”的 AppleScript。
  *
  * 为什么这样写：
- * 这里现在只保留最小可用的兜底导航逻辑：激活 Chrome，然后让 Chrome 自己用
+ * 这里现在只保留最小可用的兜底导航逻辑：激活 Chrome，然后让 Chrome 自己执行
  * `open location` 打开目标网址。
  * 复用已有签证标签页的逻辑已经在更前面的页面探测里处理过了，因此 fallback 越简单越稳。
  *
@@ -345,13 +345,13 @@ async function clickChromeScreenPoint(screenPoint, url) {
  *
  * 注意：
  * - 这里只负责兜底打开目标网址，不负责复杂的标签页复用。
- * - Chrome 对 `Get URL` 的 AppleScript 兼容性比 `open location` 更稳定，
- *   因此这里显式使用 `tell application ... to Get URL ...`。
+ * - 这里显式使用 `tell application ... to open location ...`，避免 `Get URL`
+ *   这种并不适合作为导航语句的错误 AppleScript 语法。
  */
 function buildPrepareChromeTabAppleScript(url) {
   return [
     'tell application "Google Chrome" to activate',
-    `tell application "Google Chrome" to Get URL ${JSON.stringify(url)}`,
+    `tell application "Google Chrome" to open location ${JSON.stringify(url)}`,
   ];
 }
 
