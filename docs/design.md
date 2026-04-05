@@ -7,6 +7,7 @@
 - `src/captcha-labeler.js`: lightweight local web server that turns `labels.json` into a one-image-at-a-time labeling UI
 - `src/captcha-suggest.js`: batch OCR suggester that fills `ocrText` for unlabeled captcha entries
 - `src/captcha-training.js`: training export tool that validates confirmed labels and writes a stable train/val/test dataset
+- `src/captcha-train-local.js`: first local trainer that decodes PNG captcha images, builds a prototype classifier, and writes evaluation artifacts
 - `src/chrome-bridge.js`: AppleScript bridge that opens Chrome tabs and executes page JavaScript
 - `src/chrome-page.js`: in-page DOM runtime for captcha detection, dropdown selection, and availability reading
 - `src/chrome-utils.js`: shared captcha heuristics, bridge helpers, and snapshot normalization
@@ -44,6 +45,7 @@
 13. If the command is `captcha:label`, the local labeler selects the latest dataset, opens a tiny browser UI, and saves each `expectedText` update back into `labels.json`.
 14. If the command is `captcha:suggest`, the OCR suggester scans unlabeled entries, writes `ocrText` and confidence metadata into the manifest, and leaves human confirmation to the labeler.
 15. If the command is `captcha:prepare-train`, the training exporter validates the manifest, copies images into a training directory, assigns deterministic splits, and writes summary plus JSONL files.
+16. If the command is `captcha:train-local`, the local trainer rebuilds the training directory, decodes PNG captchas, extracts 4 glyph vectors per image, trains a character prototype model from the train split, and writes summary plus per-split prediction reports.
 
 ## 3. Rule Mapping
 
@@ -110,6 +112,9 @@
 - Rule: completed labels should be convertible into a model-ready dataset without custom ad hoc scripts.
   Design: `src/captcha-training.js` exports copied images and stable JSONL manifests under `artifacts/captcha-training-current/`, with deterministic 80/10/10 splits and an OCR baseline summary.
 
+- Rule: the first model iteration should run locally without extra ML setup.
+  Design: `src/captcha-train-local.js` uses only Node built-ins plus the exported PNG dataset, then trains a lightweight nearest-prototype classifier instead of depending on Python, NumPy, or Torch.
+
 ## 4. Captcha Design
 
 - Capture source:
@@ -132,6 +137,8 @@
   run a strict-whitelist OCR pass and a fallback no-whitelist OCR pass on each unlabeled local image, pick the best candidate as `ocrText`, and keep the final confirmation in the browser UI
 - Training-export behavior:
   use the confirmed `expectedText` labels only, reject incomplete data, copy images into a dedicated export directory, and write `all.jsonl`, `train.jsonl`, `val.jsonl`, `test.jsonl`, and `summary.json`
+- Local-training behavior:
+  rebuild the exported training directory, decode 8-bit PNG captcha images locally, convert them to grayscale, compute an Otsu threshold, remove isolated noise, split the text region into 4 glyph windows, vectorize each glyph into a fixed occupancy grid, average train-split glyph vectors per character label into prototypes, then evaluate on train / val / test
 - Diagnostic behavior:
   stay on the captcha page, execute refresh attempts, store the pre/post captcha signatures and images, and persist the chosen refresh target, the broader refresh candidate list, and the raw visible-actionable-control dump for each attempt
 
@@ -179,6 +186,7 @@
   - labeler dataset selection, progress summary, and entry update behavior
   - OCR suggestion selection and manifest update behavior
   - training split assignment, validation, and OCR baseline summary
+  - PNG decode helpers, thresholding helpers, glyph-boundary selection, and prototype-model classification
   - snapshot normalization
 
 ## 8. Known Risks
@@ -197,4 +205,5 @@
 - Even with the new fallback, refresh can remain unstable, so Phase A diagnostics are now the primary source of truth before changing OCR or training strategy.
 - The local labeling UI writes the full manifest on every save, so concurrent edits from multiple browser tabs are not currently coordinated.
 - OCR suggestions currently operate on the raw local image only; if suggestion quality remains poor, the next upgrade should add local preprocessed variants before OCR.
-- The current training export prepares a stable dataset directory, but it does not yet include a local supervised model trainer; that is the next layer after the export contract is confirmed.
+- The first local prototype trainer is intentionally simple; it still loses information when 4-character segmentation drifts or when adjacent symbols touch.
+- The current local trainer uses only one preprocessing path; later iterations should compare multiple preprocessing variants and possibly store top-k predictions instead of only the best guess.

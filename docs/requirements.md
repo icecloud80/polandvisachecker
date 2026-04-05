@@ -42,6 +42,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Support a `captcha:label` command that opens a local one-image-at-a-time labeling UI on top of `labels.json`.
 - Support a `captcha:suggest` command that batch-runs OCR for unlabeled captcha entries and writes machine suggestions back into the manifest.
 - Support a `captcha:prepare-train` command that validates the finished labels and exports a training-ready dataset directory.
+- Support a `captcha:train-local` command that prepares the current labeled dataset, trains a first local classifier, and writes model plus prediction artifacts.
 - Support a `diagnose-refresh` command dedicated to Phase A refresh investigation.
 - Keep desktop notification support for positive hits.
 - `collect-captcha` must save a batch of captcha images for later manual labeling.
@@ -53,6 +54,8 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - `captcha:suggest` must only populate suggestion fields such as `ocrText`, `ocrConfidence`, and OCR attempt metadata; it must not overwrite confirmed `expectedText`.
 - `captcha:prepare-train` must fail fast if any image is missing or any label is empty / non-4-character.
 - `captcha:prepare-train` must export copied images plus `all.jsonl`, `train.jsonl`, `val.jsonl`, `test.jsonl`, and `summary.json`.
+- `captcha:train-local` must rebuild `artifacts/captcha-training-current/`, train on the deterministic `train` split only, and emit `model.json`, `summary.json`, and per-split prediction reports.
+- `captcha:train-local` must stay local-only and must not require extra Python or ML package installation.
 - `collect-captcha` must confirm the captcha image has changed after refresh before counting the next sample.
 - `diagnose-refresh` must write a per-attempt JSON record plus before/after captcha images for each refresh attempt.
 - `diagnose-refresh` must write a batch `summary.json` file with changed-image counts and record paths.
@@ -74,6 +77,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Date-option evidence is stronger than message-text evidence.
 - When no strong evidence exists, the tool must return a conservative non-available result.
 - The tool must preserve explicit page-stage reasons such as `captcha_step`, `selection_step`, and `imperva_challenge`.
+- The first local captcha trainer must preserve symbol-bearing labels such as `@`, `#`, `+`, and `=` as first-class classes.
 
 ## 5. Logic
 
@@ -89,6 +93,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - If the command is `captcha:label`, start a local browser UI over the selected `labels.json`, show the current image, save the current label, and move to the next image on demand.
 - If the command is `captcha:suggest`, batch-run OCR only for entries whose `expectedText` is empty, persist the suggestion under `ocrText`, and leave final confirmation to the labeler UI.
 - If the command is `captcha:prepare-train`, validate the selected manifest, copy the images into a dedicated training directory, assign stable train/val/test splits, and emit an OCR baseline summary.
+- If the command is `captcha:train-local`, rebuild the current training directory, decode the copied PNG images locally, train a first character prototype model from the `train` split, and emit train/val/test evaluation summaries.
 - If the command is `diagnose-refresh`, stay on the captcha page, run refresh attempts repeatedly, and persist structured evidence about each attempt instead of collecting labels.
 - Captcha refresh must activate the visible `Odśwież` button with a full mouse-event sequence instead of relying on a plain DOM `click()` only.
 - The page runtime must also try the matched element's nearest actionable ancestor when triggering `Odśwież` or `Dalej`, because the live site may wrap visible text inside nested Material-style button markup.
@@ -118,6 +123,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Treat the one-image-at-a-time labeling UI as the default annotation path, because manual JSON editing is too slow for hundreds of captcha samples.
 - Treat OCR suggestions as accelerators for manual labeling, not as confirmed labels.
 - Treat the post-label export as the start of model work, because a stable train/val/test directory is more important than training code coupled to the labeler format.
+- Treat the first local trainer as a baseline model, because it gives immediate feedback on whether the labeled dataset is learnable before investing in heavier ML tooling.
 - Treat refresh diagnostics as the prerequisite evidence layer before changing OCR or model strategy again.
 - Treat refresh-candidate enumeration as the first Phase A debugging surface, because a visible `Odśwież` label does not guarantee the current selector points at the real interactive node.
 - When refresh-candidate enumeration returns nothing, treat the actionable-control dump as the next debugging surface before changing click strategy again.
@@ -128,6 +134,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Prefer exact 4-character OCR candidates over longer noisy strings.
 - Auto-submit OCR output for every attempt, including weak guesses and symbol-bearing guesses.
 - Detect unavailable state using the exact Polish sentence, with English fallback kept only as compatibility.
+- For the first local trainer, prefer a deterministic character prototype model over heavier dependencies, because the immediate goal is to validate dataset learnability on the current machine.
 
 ## 8. Roadmap
 
@@ -141,7 +148,8 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Add a lightweight local labeling UI on top of `labels.json`.
 - Add keyboard shortcuts and filtering to the labeling UI after the basic sequential flow is stable.
 - Add a “skip to next unlabeled with no OCR suggestion” mode if OCR coverage becomes uneven.
-- Add a first-pass local training script after the training export format is confirmed stable.
+- Compare the first prototype model against improved preprocessing variants.
+- Add top-k prediction output so the labeler can optionally use model suggestions in future rechecks.
 - Add a dataset browser that reads both `labels.json` and `summary.json`, so labeling can prioritize the cleanest runs first.
 - Turn the refresh diagnostic JSON into a small analysis report that clusters failures by method, target element, and tab-loss behavior.
 - If refresh target discovery remains unstable, add a selector-analysis report that clusters failures by matched node type, actionable ancestor type, and click-point availability.
@@ -162,6 +170,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Make the labeling UI favor uninterrupted sequential entry: image on the left, answer field on the right, save-and-next as the primary action.
 - Save refresh diagnostics into per-run directories so the operator can compare JSON evidence with before/after captcha images.
 - Keep refresh candidate metadata readable in JSON so the operator can compare “visible label node” and “real clickable ancestor” without inspecting the DOM live.
+- Keep local training output machine-readable so later model iterations can diff metrics and per-split failures.
 
 ## 10. Bug Fix List
 
@@ -192,3 +201,4 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - 2026-04-05: changed `captcha:label` to prioritize the consolidated current label manifest, so the default labeling target now matches the cleaned image folder the user actually works from.
 - 2026-04-05: added `captcha:suggest` plus `ocrText` prefill so unlabeled captcha entries now open with an OCR default value that the user can confirm or correct.
 - 2026-04-05: added `captcha:prepare-train` so the fully labeled captcha set can now be exported into a deterministic train/val/test directory with OCR baseline metrics.
+- 2026-04-05: added `captcha:train-local`, a pure-Node first local trainer that decodes PNG captcha images, builds per-character prototypes, and emits train/val/test evaluation reports without extra ML dependencies.

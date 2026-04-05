@@ -12,6 +12,7 @@
     "captcha:label": "node src/captcha-labeler.js",
     "captcha:suggest": "node src/captcha-suggest.js",
     "captcha:prepare-train": "node src/captcha-training.js",
+    "captcha:train-local": "node src/captcha-train-local.js",
     "captcha:diagnose-refresh": "node src/chrome-cli.js diagnose-refresh",
     "test": "node --test"
   },

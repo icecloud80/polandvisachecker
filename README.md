@@ -85,6 +85,12 @@ Export the fully labeled captcha set into a training-ready directory:
 npm run captcha:prepare-train
 ```
 
+Train the first local prototype model on the labeled captcha set:
+
+```bash
+npm run captcha:train-local
+```
+
 Open a specific dataset or manifest:
 
 ```bash
@@ -170,6 +176,7 @@ npm test
 - `npm run captcha:label` now defaults to [captcha-images-current-labels.json](/Users/mo.li/Workspace/poland/artifacts/captcha-images-current-labels.json) when that consolidated current-label file exists.
 - `npm run captcha:suggest` runs batch OCR for entries whose `expectedText` is still empty and stores the machine suggestion in `ocrText` without marking the entry as confirmed.
 - `npm run captcha:prepare-train` validates the finished labels, copies the current captcha images into `artifacts/captcha-training-current/`, writes `train.jsonl` / `val.jsonl` / `test.jsonl`, and emits a training summary with OCR baseline stats.
+- `npm run captcha:train-local` rebuilds `artifacts/captcha-training-current/`, trains a pure-Node prototype classifier, and writes the model plus prediction reports into `artifacts/captcha-model-current/`.
 - The UI shows one image at a time, lets you type the correct captcha text, and supports `Save` plus `Save & Next`.
 - When an entry has no confirmed `expectedText` yet, the labeler now pre-fills the input with `ocrText` so you only need to confirm or correct it.
 - Press `Enter` inside the captcha text field to save the current label and jump to the next image.
@@ -191,6 +198,33 @@ npm test
   - `train`: 80%
   - `val`: 10%
   - `test`: 10%
+
+## Local Training
+
+- `npm run captcha:train-local` uses the current consolidated labels by default and automatically refreshes `artifacts/captcha-training-current/` before training.
+- The model output directory is `artifacts/captcha-model-current/`.
+- The first local trainer is a pure-Node character prototype model:
+  - decode PNG captcha images locally
+  - grayscale + Otsu threshold
+  - light denoise
+  - split the text region into 4 glyph boxes
+  - vectorize each glyph into a fixed-size occupancy grid
+  - average train-split glyph vectors per character into prototypes
+  - evaluate train / val / test with nearest-prototype classification
+- It writes:
+  - `model.json`
+  - `summary.json`
+  - `train-predictions.json`
+  - `val-predictions.json`
+  - `test-predictions.json`
+- The current first-run metrics on the 206 labeled samples are:
+  - `train` exact match: `0.538`
+  - `val` exact match: `0.3333`
+  - `test` exact match: `0.3529`
+  - `train` character accuracy: `0.7544`
+  - `val` character accuracy: `0.6389`
+  - `test` character accuracy: `0.5735`
+- This already beats the earlier OCR baseline, whose exact-match rate on suggested samples was only `0.1282`.
 
 ## Refresh Diagnostics
 
