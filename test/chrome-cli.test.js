@@ -20,6 +20,8 @@ const {
   saveCaptchaCollectionSample,
   saveRefreshDiagnosticSnapshotImages,
   selectPreferredCaptchaLabelSource,
+  selectBestCaptchaSolverResult,
+  isConfidentLocalModelAttempt,
   summarizeSnapshotForRefreshDiagnostic,
   writeCaptchaCollectionSummary,
   writeRefreshDiagnosticRecord,
@@ -307,6 +309,142 @@ test("hasUsableRefreshClickPoint only accepts refresh targets with numeric coord
   );
   assert.equal(hasUsableRefreshClickPoint({ clickPoint: { x: null, y: 240 } }), false);
   assert.equal(hasUsableRefreshClickPoint({}), false);
+});
+
+/**
+ * 作用：
+ * 验证本地模型平均距离门槛会筛出更可信的 live captcha 结果。
+ *
+ * 为什么这样写：
+ * 本地原型模型总能输出 4 位文本。
+ * 如果不加门槛，checker 会把明显不靠谱的预测也直接提交出去。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入示例本地模型结果和配置。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 当前默认阈值来自现有验证集距离分布。
+ * - 后续若调阈值，需要同步更新这条测试。
+ */
+test("isConfidentLocalModelAttempt accepts only low-distance local model guesses", () => {
+  assert.equal(
+    isConfidentLocalModelAttempt(
+      {
+        candidate: "A8Bd",
+        averageDistance: 31.5,
+      },
+      {
+        localCaptchaModelMaxAverageDistance: 35,
+      }
+    ),
+    true
+  );
+  assert.equal(
+    isConfidentLocalModelAttempt(
+      {
+        candidate: "A8Bd",
+        averageDistance: 44.2,
+      },
+      {
+        localCaptchaModelMaxAverageDistance: 35,
+      }
+    ),
+    false
+  );
+});
+
+/**
+ * 作用：
+ * 验证验证码选择器会优先采用高置信本地模型结果。
+ *
+ * 为什么这样写：
+ * 这次改动的目标就是先把新训练出来的模型接到 checker 上。
+ * 测试需要锁住“模型足够稳时由它优先提交”的策略。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入示例本地模型和 OCR 尝试结果。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 当前优先级是“高置信本地模型”高于“看起来可提交的 OCR”。
+ * - 返回值里的 attempts 应保留两类尝试，方便日志排查。
+ */
+test("selectBestCaptchaSolverResult prefers a confident local model attempt", () => {
+  const result = selectBestCaptchaSolverResult(
+    [
+      {
+        engine: "local-model",
+        candidate: "A8Bd",
+        averageDistance: 29.1,
+        isConfident: true,
+      },
+    ],
+    [
+      {
+        engine: "tesseract",
+        candidate: "AB8d",
+        confidence: 88,
+        isLikely: true,
+      },
+    ],
+    {
+      localCaptchaModelMaxAverageDistance: 35,
+    }
+  );
+
+  assert.equal(result.captchaText, "A8Bd");
+  assert.equal(result.winningAttempt.engine, "local-model");
+  assert.equal(result.attempts.length, 2);
+});
+
+/**
+ * 作用：
+ * 验证当本地模型不够稳时，会退回到 OCR 的可提交候选值。
+ *
+ * 为什么这样写：
+ * 第一版上线策略不是强行全量替换 OCR。
+ * 这条测试锁住保守回退行为，避免新模型把现有可用 OCR 结果盖掉。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入示例本地模型和 OCR 尝试结果。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 当前只要本地模型没过距离阈值，就允许 OCR 兜底。
+ * - 这能减少 live checker 初次集成时的回归风险。
+ */
+test("selectBestCaptchaSolverResult falls back to OCR when the local model is not confident", () => {
+  const result = selectBestCaptchaSolverResult(
+    [
+      {
+        engine: "local-model",
+        candidate: "A8Bd",
+        averageDistance: 46.2,
+        isConfident: false,
+      },
+    ],
+    [
+      {
+        engine: "tesseract",
+        candidate: "AB8d",
+        confidence: 88,
+        isLikely: true,
+      },
+    ],
+    {
+      localCaptchaModelMaxAverageDistance: 35,
+    }
+  );
+
+  assert.equal(result.captchaText, "AB8d");
+  assert.equal(result.winningAttempt.engine, "tesseract");
 });
 
 /**

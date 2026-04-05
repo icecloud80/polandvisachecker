@@ -37,6 +37,37 @@ function readJsonLines(filePath) {
 
 /**
  * 作用：
+ * 解析图片 data URL 并还原成二进制 buffer。
+ *
+ * 为什么这样写：
+ * checker 实时拿到的是页面里的 data URL。
+ * 训练脚本如果也能直接消费同一种格式，就不必为了模型推理额外落盘临时文件。
+ *
+ * 输入：
+ * @param {string} dataUrl - 图片 data URL。
+ *
+ * 输出：
+ * @returns {object} 包含 mimeType 和 buffer 的图片对象。
+ *
+ * 注意：
+ * - 当前只支持 `data:image/...;base64,...`。
+ * - 非法数据会直接抛错，避免模型 silently 吃脏数据。
+ */
+function parseImageDataUrl(dataUrl) {
+  const match = String(dataUrl || "").match(/^data:(image\/[a-z0-9+.-]+);base64,(.+)$/i);
+
+  if (!match) {
+    throw new Error("Invalid image data URL.");
+  }
+
+  return {
+    mimeType: match[1],
+    buffer: Buffer.from(match[2], "base64"),
+  };
+}
+
+/**
+ * 作用：
  * 计算 PNG 反滤波算法里的 Paeth 预测值。
  *
  * 为什么这样写：
@@ -229,6 +260,40 @@ function decodePng(buffer) {
     bytesPerPixel,
     data,
   };
+}
+
+/**
+ * 作用：
+ * 从文件系统加载本地 captcha 原型模型。
+ *
+ * 为什么这样写：
+ * checker 运行时只需要消费已经训练好的模型，不应该重复解析训练过程里的其他产物。
+ * 单独封装模型加载入口后，CLI 和测试都可以共享同一套契约。
+ *
+ * 输入：
+ * @param {string} modelPath - `model.json` 文件路径。
+ *
+ * 输出：
+ * @returns {object} 解析后的模型对象。
+ *
+ * 注意：
+ * - 当前要求文件结构包含 `model.labels` 和 `model.prototypes`。
+ * - 文件缺失或结构不完整时会直接抛错。
+ */
+function loadLocalCaptchaModel(modelPath) {
+  const payload = JSON.parse(fs.readFileSync(modelPath, "utf8"));
+  const model = payload && payload.model;
+
+  if (
+    !model ||
+    !Array.isArray(model.labels) ||
+    !model.prototypes ||
+    typeof model.prototypes !== "object"
+  ) {
+    throw new Error("Invalid local captcha model payload.");
+  }
+
+  return model;
 }
 
 /**
@@ -801,9 +866,59 @@ function vectorizeMaskRegion(mask, width, bounds, outputWidth, outputHeight) {
  * - 如果掩码为空，会退回到中心区域和等分分割。
  */
 function extractCaptchaGlyphVectors(imagePath, options = {}) {
+  const image = decodePng(fs.readFileSync(imagePath));
+
+  return extractCaptchaGlyphVectorsFromDecodedImage(image, options);
+}
+
+/**
+ * 作用：
+ * 从图片 data URL 中提取 4 个字符向量。
+ *
+ * 为什么这样写：
+ * checker 拿到的 captcha 图片来源于页面 data URL。
+ * 直接在内存里完成解码和特征提取，可以少一次临时文件写入。
+ *
+ * 输入：
+ * @param {string} dataUrl - captcha 图片 data URL。
+ * @param {object} options - 预处理与向量尺寸配置。
+ *
+ * 输出：
+ * @returns {object} 包含字符向量、阈值和边界信息的对象。
+ *
+ * 注意：
+ * - 当前仅支持 PNG data URL。
+ * - 如果页面未来返回 JPEG/WebP，需要扩展这里的解码分支。
+ */
+function extractCaptchaGlyphVectorsFromDataUrl(dataUrl, options = {}) {
+  const parsedImage = parseImageDataUrl(dataUrl);
+  const image = decodePng(parsedImage.buffer);
+
+  return extractCaptchaGlyphVectorsFromDecodedImage(image, options);
+}
+
+/**
+ * 作用：
+ * 从已解码图片对象中提取 4 个字符向量。
+ *
+ * 为什么这样写：
+ * 文件路径和 data URL 两种入口最后都会汇聚到同一条特征提取链路。
+ * 把真正的图像处理逻辑集中在这里，可以避免两套实现漂移。
+ *
+ * 输入：
+ * @param {object} image - 已解码图片对象。
+ * @param {object} options - 预处理与向量尺寸配置。
+ *
+ * 输出：
+ * @returns {object} 包含字符向量、阈值和边界信息的对象。
+ *
+ * 注意：
+ * - 当前默认输出 4 个字符向量。
+ * - 如果掩码为空，会退回到中心区域和等分分割。
+ */
+function extractCaptchaGlyphVectorsFromDecodedImage(image, options = {}) {
   const vectorWidth = Number(options.vectorWidth || 18);
   const vectorHeight = Number(options.vectorHeight || 22);
-  const image = decodePng(fs.readFileSync(imagePath));
   const grayscale = buildGrayscalePixels(image);
   const initialMaskResult = createInitialBinaryMask(grayscale, image.width, image.height);
   const mask = denoiseBinaryMask(initialMaskResult.mask, image.width, image.height);
@@ -1005,6 +1120,45 @@ function predictCaptchaText(glyphVectors, model) {
     text: predictions.map((prediction) => prediction.label).join(""),
     characters: predictions.map((prediction) => prediction.label),
     distances: predictions.map((prediction) => prediction.distance),
+  };
+}
+
+/**
+ * 作用：
+ * 用本地原型模型直接预测一张 data URL captcha。
+ *
+ * 为什么这样写：
+ * checker 实时提交前最需要的是“给当前图片一个 4 位猜测和可信度分数”。
+ * 这里把特征提取、逐字符分类和整体打分打包在一起，便于主流程直接消费。
+ *
+ * 输入：
+ * @param {string} dataUrl - captcha 图片 data URL。
+ * @param {object} model - 已加载的本地原型模型。
+ * @param {object} options - 预处理配置。
+ *
+ * 输出：
+ * @returns {object} 本地模型预测结果。
+ *
+ * 注意：
+ * - `averageDistance` 越低通常越可信，但不是绝对概率。
+ * - 当前仍然会始终返回 4 位预测字符，由上层决定是否提交。
+ */
+function predictCaptchaDataUrl(dataUrl, model, options = {}) {
+  const extraction = extractCaptchaGlyphVectorsFromDataUrl(dataUrl, options);
+  const prediction = predictCaptchaText(extraction.glyphVectors, model);
+  const averageDistance =
+    prediction.distances.length > 0
+      ? prediction.distances.reduce((sum, current) => sum + current, 0) / prediction.distances.length
+      : Number.POSITIVE_INFINITY;
+
+  return {
+    text: prediction.text,
+    characters: prediction.characters,
+    distances: prediction.distances,
+    averageDistance: Number(averageDistance.toFixed(6)),
+    threshold: extraction.threshold,
+    bounds: extraction.bounds,
+    boundaries: extraction.boundaries,
   };
 }
 
@@ -1330,13 +1484,18 @@ module.exports = {
   createInitialBinaryMask,
   decodePng,
   denoiseBinaryMask,
+  extractCaptchaGlyphVectorsFromDataUrl,
+  extractCaptchaGlyphVectorsFromDecodedImage,
   evaluateCaptchaRecords,
   expandBounds,
   extractCaptchaGlyphVectors,
   extractGlyphBounds,
   findMaskBounds,
+  loadLocalCaptchaModel,
   parseLocalTrainArgs,
+  parseImageDataUrl,
   paethPredictor,
+  predictCaptchaDataUrl,
   predictCaptchaText,
   predictCharacterVector,
   readJsonLines,

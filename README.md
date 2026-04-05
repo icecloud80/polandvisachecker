@@ -8,6 +8,7 @@ Single-run macOS CLI for checking whether the Poland Schengen visa page for Los 
 - Navigates directly to:
   `https://secure.e-konsulat.gov.pl/placowki/126/wiza-schengen/wizyty/weryfikacja-obrazkowa`
 - Reads the captcha with local OCR
+- Tries the local captcha prototype model first in `check`, then falls back to Tesseract OCR if the model score is not confident enough
 - Re-runs OCR until it gets a 4-character candidate, including symbols such as `@`, `+`, `=`, and `#`
 - If the first OCR path is still weak, switches to an alternate processed captcha capture and runs OCR again
 - Only submits OCR when it has a 4-character captcha candidate; otherwise it refreshes the captcha and retries automatically
@@ -152,6 +153,7 @@ npm test
 ## Notes
 
 - OCR is now OCR-first and fully automated in `check`. The terminal no longer blocks waiting for manual captcha correction.
+- `check` now loads `artifacts/captcha-model-current/model.json` by default and prefers a low-distance local-model guess before falling back to Tesseract.
 - OCR cleaning now restricts output to the known 4-character captcha alphabet, including `@`, `+`, `=`, and `#`.
 - The page runtime now exposes both raw and processed captcha captures so OCR has a fallback image source before the next retry.
 - Positive hits still use desktop notification support when enabled.
@@ -225,6 +227,10 @@ npm test
   - `val` character accuracy: `0.6389`
   - `test` character accuracy: `0.5735`
 - This already beats the earlier OCR baseline, whose exact-match rate on suggested samples was only `0.1282`.
+- Checker integration currently uses a conservative local-model gate:
+  - environment flag: `USE_LOCAL_CAPTCHA_MODEL=true`
+  - default model path: `artifacts/captcha-model-current/model.json`
+  - default max average distance: `35`
 
 ## Refresh Diagnostics
 

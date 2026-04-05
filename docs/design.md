@@ -25,6 +25,8 @@
    - capture captcha image
    - capture an alternate processed captcha image in the page runtime
    - save image to `artifacts/`
+   - run the local prototype model against the available captcha variants first
+   - if a local-model guess has low enough average distance, submit it directly
    - OCR the image in Node with Tesseract
    - first retry OCR against the raw capture until a 4-character candidate is found or exhausted
    - if needed, switch to the processed capture and OCR again
@@ -115,6 +117,9 @@
 - Rule: the first model iteration should run locally without extra ML setup.
   Design: `src/captcha-train-local.js` uses only Node built-ins plus the exported PNG dataset, then trains a lightweight nearest-prototype classifier instead of depending on Python, NumPy, or Torch.
 
+- Rule: live checker integration should use the local model conservatively.
+  Design: `src/chrome-cli.js` loads `artifacts/captcha-model-current/model.json`, scores each captcha variant with the prototype model, and only lets the model outrank Tesseract when the average-distance score passes a configurable threshold.
+
 ## 4. Captcha Design
 
 - Capture source:
@@ -139,6 +144,8 @@
   use the confirmed `expectedText` labels only, reject incomplete data, copy images into a dedicated export directory, and write `all.jsonl`, `train.jsonl`, `val.jsonl`, `test.jsonl`, and `summary.json`
 - Local-training behavior:
   rebuild the exported training directory, decode 8-bit PNG captcha images locally, convert them to grayscale, compute an Otsu threshold, remove isolated noise, split the text region into 4 glyph windows, vectorize each glyph into a fixed occupancy grid, average train-split glyph vectors per character label into prototypes, then evaluate on train / val / test
+- Checker-side model behavior:
+  score raw and processed captcha variants with the local prototype model, record the per-variant average distance in the attempt log, and use the model guess only when that distance is low enough; otherwise continue into the existing Tesseract flow
 - Diagnostic behavior:
   stay on the captcha page, execute refresh attempts, store the pre/post captcha signatures and images, and persist the chosen refresh target, the broader refresh candidate list, and the raw visible-actionable-control dump for each attempt
 
@@ -207,3 +214,4 @@
 - OCR suggestions currently operate on the raw local image only; if suggestion quality remains poor, the next upgrade should add local preprocessed variants before OCR.
 - The first local prototype trainer is intentionally simple; it still loses information when 4-character segmentation drifts or when adjacent symbols touch.
 - The current local trainer uses only one preprocessing path; later iterations should compare multiple preprocessing variants and possibly store top-k predictions instead of only the best guess.
+- The checker-side gate currently uses one coarse average-distance threshold, so live integration may still reject model guesses that would actually pass; future work should calibrate this threshold against saved live captcha artifacts.

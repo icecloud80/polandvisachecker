@@ -37,6 +37,10 @@ const {
 } = require("./chrome-utils");
 const { notifyIfNeeded } = require("./notifier");
 const { inferAvailability } = require("./status");
+const {
+  loadLocalCaptchaModel,
+  predictCaptchaDataUrl,
+} = require("./captcha-train-local");
 
 dotenv.config();
 
@@ -76,9 +80,203 @@ function loadChromeCliConfig() {
     webhookAuthToken: process.env.WEBHOOK_AUTH_TOKEN || "",
     chromeStepDelayMs: Number(process.env.CHROME_STEP_DELAY_MS || 1800),
     resultDelayMs: Number(process.env.CHROME_RESULT_DELAY_MS || 3500),
+    useLocalCaptchaModel:
+      String(process.env.USE_LOCAL_CAPTCHA_MODEL || "true").toLowerCase() === "true",
+    localCaptchaModelPath: path.resolve(
+      process.cwd(),
+      process.env.LOCAL_CAPTCHA_MODEL_PATH || "artifacts/captcha-model-current/model.json"
+    ),
+    localCaptchaModelMaxAverageDistance: Number(
+      process.env.LOCAL_CAPTCHA_MODEL_MAX_AVERAGE_DISTANCE || 50
+    ),
+    captchaSolveMaxAttempts: Number(process.env.CAPTCHA_SOLVE_MAX_ATTEMPTS || 5),
     captchaCollectCount: Number(process.env.CAPTCHA_COLLECT_COUNT || 20),
     captchaCollectRefreshDelayMs: Number(process.env.CAPTCHA_COLLECT_REFRESH_DELAY_MS || 1200),
     refreshDiagnosticCount: Number(process.env.REFRESH_DIAGNOSTIC_COUNT || 5),
+  };
+}
+
+/**
+ * 作用：
+ * 从配置里按需加载本地 captcha 原型模型。
+ *
+ * 为什么这样写：
+ * checker 每轮 captcha 都会反复调用识别逻辑。
+ * 把模型缓存到配置对象上后，同一次命令执行里只需加载一次模型文件。
+ *
+ * 输入：
+ * @param {object} config - 运行配置。
+ *
+ * 输出：
+ * @returns {object|null} 已加载的模型对象；不可用时返回 null。
+ *
+ * 注意：
+ * - 模型文件缺失时不会抛错打断主流程，而是回退到 Tesseract。
+ * - 配置对象会被附加 `_localCaptchaModel` 缓存字段。
+ */
+function getLocalCaptchaModel(config) {
+  if (!config || config.useLocalCaptchaModel !== true) {
+    return null;
+  }
+
+  if (config._localCaptchaModel) {
+    return config._localCaptchaModel;
+  }
+
+  if (!fs.existsSync(config.localCaptchaModelPath)) {
+    return null;
+  }
+
+  config._localCaptchaModel = loadLocalCaptchaModel(config.localCaptchaModelPath);
+  return config._localCaptchaModel;
+}
+
+/**
+ * 作用：
+ * 判断本地模型预测结果是否足够可信，可以优先于 Tesseract 提交。
+ *
+ * 为什么这样写：
+ * 原型模型总会给出 4 位输出，因此 checker 不能把“有输出”直接等价成“可信”。
+ * 这里用训练后观察到的平均距离阈值做第一版门槛，减少明显错猜被直接提交。
+ *
+ * 输入：
+ * @param {object} attempt - 本地模型预测结果。
+ * @param {object} config - 运行配置。
+ *
+ * 输出：
+ * @returns {boolean} 是否达到优先提交阈值。
+ *
+ * 注意：
+ * - 当前阈值默认 35，来自现有验证集的粗分布，不是严格概率。
+ * - 若后续模型结构变化，需要同步重新校准这个阈值。
+ */
+function isConfidentLocalModelAttempt(attempt, config) {
+  return (
+    attempt &&
+    String(attempt.candidate || "").length === 4 &&
+    Number(attempt.averageDistance || Number.POSITIVE_INFINITY) <=
+      Number(config.localCaptchaModelMaxAverageDistance || 35)
+  );
+}
+
+/**
+ * 作用：
+ * 在当前 captcha 图片来源上运行本地原型模型预测。
+ *
+ * 为什么这样写：
+ * 用户已经手工标完了一批真实 captcha。
+ * 把训练出来的本地模型直接并入 checker，可以先验证它在 live 页面上是否比通用 OCR 更有通过率。
+ *
+ * 输入：
+ * @param {object} config - 运行配置。
+ * @param {Array<object>} imageSources - 候选验证码图片来源列表。
+ *
+ * 输出：
+ * @returns {Array<object>} 本地模型尝试结果列表。
+ *
+ * 注意：
+ * - 当前只在模型文件存在时运行。
+ * - 单个变体解析失败不会打断整轮识别，而是跳过该来源。
+ */
+function runLocalCaptchaModelAttempts(config, imageSources) {
+  const model = getLocalCaptchaModel(config);
+
+  if (!model) {
+    return [];
+  }
+
+  const attempts = [];
+
+  for (const source of Array.isArray(imageSources) ? imageSources : []) {
+    try {
+      const prediction = predictCaptchaDataUrl(source.dataUrl, model);
+
+      attempts.push({
+        engine: "local-model",
+        sourceLabel: source.label,
+        passLabel: "prototype-model",
+        rawText: prediction.text,
+        candidate: sanitizeCaptchaText(prediction.text),
+        confidence: Number((100 - prediction.averageDistance).toFixed(6)),
+        averageDistance: prediction.averageDistance,
+        distances: prediction.distances,
+        isLikely: isLikelyCaptchaText(prediction.text),
+        isConfident: isConfidentLocalModelAttempt(
+          {
+            candidate: prediction.text,
+            averageDistance: prediction.averageDistance,
+          },
+          config
+        ),
+      });
+    } catch (error) {
+      attempts.push({
+        engine: "local-model",
+        sourceLabel: source && source.label ? source.label : "unknown-source",
+        passLabel: "prototype-model-error",
+        rawText: "",
+        candidate: "",
+        confidence: 0,
+        averageDistance: Number.POSITIVE_INFINITY,
+        distances: [],
+        isLikely: false,
+        isConfident: false,
+        error: String(error.message || error),
+      });
+    }
+  }
+
+  return attempts;
+}
+
+/**
+ * 作用：
+ * 在本地模型尝试结果之间选择当前最值得提交的验证码候选值。
+ *
+ * 为什么这样写：
+ * 用户已经确认 Tesseract 在当前站点上的正确率太低，因此 live checker 现在只使用本地模型。
+ * 这里统一处理“优先哪条本地模型结果”，主流程就只需要拿最终候选值去提交。
+ *
+ * 输入：
+ * @param {Array<object>} localModelAttempts - 本地模型尝试结果。
+ * @param {object} config - 运行配置。
+ *
+ * 输出：
+ * @returns {object} 选中的验证码结果对象。
+ *
+ * 注意：
+ * - 当前优先选择平均距离达标的本地模型结果。
+ * - 若没有达标结果，仍会返回距离最低的本地模型结果供主流程提交。
+ */
+function selectBestCaptchaSolverResult(localModelAttempts, config) {
+  const confidentLocalAttempt = (Array.isArray(localModelAttempts) ? localModelAttempts : [])
+    .filter((attempt) => attempt && attempt.isConfident)
+    .sort(
+      (left, right) =>
+        Number(left.averageDistance || Number.POSITIVE_INFINITY) -
+        Number(right.averageDistance || Number.POSITIVE_INFINITY)
+    )[0];
+
+  if (confidentLocalAttempt) {
+    return {
+      captchaText: confidentLocalAttempt.candidate,
+      attempts: [...localModelAttempts],
+      winningAttempt: confidentLocalAttempt,
+    };
+  }
+
+  const bestLocalAttempt = (Array.isArray(localModelAttempts) ? localModelAttempts : [])
+    .filter((attempt) => attempt && attempt.candidate)
+    .sort(
+      (left, right) =>
+        Number(left.averageDistance || Number.POSITIVE_INFINITY) -
+        Number(right.averageDistance || Number.POSITIVE_INFINITY)
+    )[0];
+
+  return {
+    captchaText: bestLocalAttempt ? bestLocalAttempt.candidate : "",
+    attempts: [...localModelAttempts],
+    winningAttempt: bestLocalAttempt || null,
   };
 }
 
@@ -1210,37 +1408,51 @@ async function refreshCaptchaWithFallback(config, previousSignature, options = {
  * - candidate 可能少于 4 位，调用方需要继续重试。
  */
 async function recognizeCaptchaSource(worker, source, passLabel, useWhitelist) {
-  await worker.setParameters({
-    tessedit_char_whitelist: useWhitelist ? CAPTCHA_ALLOWED_CHARACTERS : "",
-  });
+  try {
+    await worker.setParameters({
+      tessedit_char_whitelist: useWhitelist ? CAPTCHA_ALLOWED_CHARACTERS : "",
+    });
 
-  const {
-    data: { text, confidence },
-  } = await worker.recognize(source.dataUrl);
+    const {
+      data: { text, confidence },
+    } = await worker.recognize(source.dataUrl);
 
-  const rawText = String(text || "");
-  const candidate = extractBestCaptchaTextCandidate(rawText);
+    const rawText = String(text || "");
+    const candidate = extractBestCaptchaTextCandidate(rawText);
 
-  return {
-    sourceLabel: source.label,
-    passLabel,
-    rawText,
-    candidate,
-    confidence: Number(confidence || 0),
-    isLikely: isLikelyCaptchaText(candidate),
-  };
+    return {
+      engine: "tesseract",
+      sourceLabel: source.label,
+      passLabel,
+      rawText,
+      candidate,
+      confidence: Number(confidence || 0),
+      isLikely: isLikelyCaptchaText(candidate),
+    };
+  } catch (error) {
+    return {
+      engine: "tesseract",
+      sourceLabel: source && source.label ? source.label : "unknown-source",
+      passLabel: `${passLabel}-error`,
+      rawText: "",
+      candidate: "",
+      confidence: 0,
+      isLikely: false,
+      error: String(error.message || error),
+    };
+  }
 }
 
 /**
  * 作用：
- * 用本地 OCR 多轮识别页面返回的验证码图像，并在必要时切换抓图方式重试。
+ * 用本地 captcha 模型识别页面返回的验证码图像。
  *
  * 为什么这样写：
- * 用户已经确认验证码固定为 4 个字符，因此 OCR 不能只跑一次就结束。
- * 这里会先对原始抓图重试 OCR；若仍然拿不到 4 位候选值，再切到页面侧的备选抓图版本重试，
- * 以尽量在不人工干预的前提下产出可提交的 4 位验证码。
+ * 用户已经确认当前 live checker 不再使用 Tesseract，而是完全依赖本地模型。
+ * 这里直接对页面提供的 captcha 图像变体运行本地模型，并挑出当前最值得提交的候选值。
  *
  * 输入：
+ * @param {object} config - 运行配置。
  * @param {string} captchaDataUrl - 主验证码图片的 data URL 或直接 URL。
  * @param {Array<object>} captchaDataVariants - 页面侧提供的验证码抓图变体。
  *
@@ -1248,76 +1460,21 @@ async function recognizeCaptchaSource(worker, source, passLabel, useWhitelist) {
  * @returns {Promise<object>} 最终 OCR 结果对象。
  *
  * 注意：
- * - OCR 结果不保证正确，但会尽量优先返回 4 位候选值。
- * - 这里只做英文识别。
+ * - 本地模型结果不保证正确，但会尽量优先返回平均距离更低的 4 位候选值。
+ * - 当前该入口不再调用 Tesseract。
  */
-async function solveCaptchaFromPageData(captchaDataUrl, captchaDataVariants) {
+async function solveCaptchaFromPageData(config, captchaDataUrl, captchaDataVariants) {
   const imageSources = buildCaptchaImageSources(captchaDataUrl, captchaDataVariants);
+  const localModelAttempts = runLocalCaptchaModelAttempts(config, imageSources);
 
   if (imageSources.length === 0) {
     return {
       captchaText: "",
-      attempts: [],
+      attempts: localModelAttempts,
     };
   }
 
-  const worker = await createWorker("eng");
-  const attempts = [];
-
-  try {
-    const primarySources = imageSources.filter((source, index) => index === 0);
-    const secondarySources = imageSources.filter((source, index) => index > 0);
-
-    for (const source of primarySources) {
-      for (const pass of [
-        { label: "strict-whitelist", useWhitelist: true },
-        { label: "fallback-no-whitelist", useWhitelist: false },
-      ]) {
-        const result = await recognizeCaptchaSource(worker, source, pass.label, pass.useWhitelist);
-
-        attempts.push(result);
-
-        if (result.isLikely) {
-          return {
-            captchaText: result.candidate,
-            attempts,
-            winningAttempt: result,
-          };
-        }
-      }
-    }
-
-    for (const source of secondarySources) {
-      for (const pass of [
-        { label: "alt-capture-strict-whitelist", useWhitelist: true },
-        { label: "alt-capture-no-whitelist", useWhitelist: false },
-      ]) {
-        const result = await recognizeCaptchaSource(worker, source, pass.label, pass.useWhitelist);
-
-        attempts.push(result);
-
-        if (result.isLikely) {
-          return {
-            captchaText: result.candidate,
-            attempts,
-            winningAttempt: result,
-          };
-        }
-      }
-    }
-
-    const bestAttempt = attempts
-      .slice()
-      .sort((left, right) => right.candidate.length - left.candidate.length || right.confidence - left.confidence)[0];
-
-    return {
-      captchaText: bestAttempt ? bestAttempt.candidate : "",
-      attempts,
-      winningAttempt: bestAttempt || null,
-    };
-  } finally {
-    await worker.terminate();
-  }
+  return selectBestCaptchaSolverResult(localModelAttempts, config);
 }
 
 /**
@@ -1385,7 +1542,7 @@ async function readSnapshotWithCaptchaWait(config) {
     return snapshot;
   }
 
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= Math.max(1, config.captchaSolveMaxAttempts); attempt += 1) {
     await sleep(Math.max(400, Math.floor(config.chromeStepDelayMs / 2)));
     snapshot = normalizeChromeStatus(await runPageAction(buildSnapshotAction()));
 
@@ -1454,6 +1611,7 @@ async function resolveAvailabilityAfterCaptcha(config) {
     }
 
     const ocrResult = await solveCaptchaFromPageData(
+      config,
       currentSnapshot.captchaDataUrl,
       currentSnapshot.captchaDataVariants
     );
@@ -1468,7 +1626,11 @@ async function resolveAvailabilityAfterCaptcha(config) {
       const summary = ocrResult.attempts
         .map(
           (ocrAttempt) =>
-            `${ocrAttempt.sourceLabel}/${ocrAttempt.passLabel}="${ocrAttempt.candidate}"(${Math.round(ocrAttempt.confidence)})`
+            `${ocrAttempt.sourceLabel}/${ocrAttempt.passLabel}="${ocrAttempt.candidate}"(${
+              ocrAttempt.engine === "local-model" && Number.isFinite(ocrAttempt.averageDistance)
+                ? `d=${ocrAttempt.averageDistance.toFixed(1)}`
+                : Math.round(ocrAttempt.confidence)
+            })`
         )
         .join(", ");
 
@@ -2031,6 +2193,8 @@ module.exports = {
   saveCaptchaCollectionSample,
   saveRefreshDiagnosticSnapshotImages,
   selectPreferredCaptchaLabelSource,
+  selectBestCaptchaSolverResult,
+  isConfidentLocalModelAttempt,
   waitForCaptchaSignatureChange,
   writeCaptchaCollectionSummary,
   writeRefreshDiagnosticRecord,
