@@ -21,6 +21,10 @@ Single-run macOS CLI for checking whether the Poland Schengen visa page for Los 
 - Detects whether `Termin` has real options or whether the page shows the Polish “all reserved” message
 - Saves post-captcha status artifacts so we can inspect exactly which dropdowns were found and what options were visible
 - After each captcha submit, treats visible post-captcha dropdowns as stronger evidence than the old captcha URL, so the terminal stops waiting once the next page is reached
+- After each captcha submit, performs a dedicated post-submit snapshot poll for the next page instead of only waiting on captcha-specific signals
+- After each captcha submit, also treats the visible next-step field labels themselves as strong post-captcha evidence, even before the dropdown controls finish hydrating
+- If a post-submit snapshot no longer shows any captcha input or captcha image, re-checks page state before trying to refresh captcha again
+- If that re-check still sees no captcha UI, the run now force-promotes the flow to the post-captcha selection step instead of refreshing captcha again
 
 ## What This Version Does Not Do
 
@@ -161,6 +165,9 @@ npm test
 - OCR cleaning now restricts output to the known 4-character captcha alphabet, including `@`, `+`, `=`, and `#`.
 - The page runtime now exposes both raw and processed captcha captures so OCR has a fallback image source before the next retry.
 - Post-captcha snapshots now include field diagnostics for `Rodzaj usługi`, `Lokalizacja`, `Chcę zarezerwować termin dla`, and `Termin`, including control type, current text, and visible option texts.
+- Post-captcha snapshots now also include `selectionLabelEvidence`, so the CLI can stop captcha retries as soon as the next-step labels are visible.
+- The post-captcha selector runtime now falls back to the visible vertical order of the four `mat-select` controls when the live page does not expose usable label text around each dropdown.
+- Final “all reserved” detection now also matches normalized and diacritic-stripped page text, so the Polish result is still recognized when the live page inserts line breaks or non-breaking spaces.
 - Positive hits still use desktop notification support when enabled.
 - Debug mode is intentionally verbose; normal `check` output is intentionally compact.
 

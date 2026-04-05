@@ -426,6 +426,10 @@ function normalizeChromeStatus(payload) {
     input.selectionDiagnostics && typeof input.selectionDiagnostics === "object"
       ? input.selectionDiagnostics
       : {};
+  const selectionLabelEvidence =
+    input.selectionLabelEvidence && typeof input.selectionLabelEvidence === "object"
+      ? input.selectionLabelEvidence
+      : {};
 
   /**
    * 作用：
@@ -455,6 +459,41 @@ function normalizeChromeStatus(payload) {
       optionTexts: Array.isArray(field.optionTexts) ? field.optionTexts : [],
       contextText: String(field.contextText || ""),
       element: field.element && typeof field.element === "object" ? field.element : null,
+    };
+  }
+
+  /**
+   * 作用：
+   * 归一化“字段标签已出现”的页面证据对象。
+   *
+   * 为什么这样写：
+   * post-captcha 轮询现在需要依赖字段标签文本来提前识别“已经进入下一页”。
+   * 把结构兜底放在这里后，上层逻辑就不需要反复判断字段是否存在。
+   *
+   * 输入：
+   * @param {object} value - 页面侧返回的字段标签证据对象。
+   *
+   * 输出：
+   * @returns {object} 结构稳定的字段标签证据。
+   *
+   * 注意：
+   * - 这里只做结构归一化，不重新计算命中结果。
+   * - `hasStrongEvidence` 为 true 时可直接视为已经过页。
+   */
+  function normalizeSelectionLabelEvidence(value) {
+    const evidence = value && typeof value === "object" ? value : {};
+    const fields = evidence.fields && typeof evidence.fields === "object" ? evidence.fields : {};
+
+    return {
+      fields: {
+        service: fields.service === true,
+        location: fields.location === true,
+        people: fields.people === true,
+        date: fields.date === true,
+      },
+      matchedFieldCount: Number(evidence.matchedFieldCount || 0),
+      coreFieldCount: Number(evidence.coreFieldCount || 0),
+      hasStrongEvidence: evidence.hasStrongEvidence === true,
     };
   }
 
@@ -495,7 +534,62 @@ function normalizeChromeStatus(payload) {
       people: normalizeSelectionField(selectionDiagnostics.people),
       date: normalizeSelectionField(selectionDiagnostics.date),
     },
+    selectionLabelEvidence: normalizeSelectionLabelEvidence(selectionLabelEvidence),
   };
+}
+
+/**
+ * 作用：
+ * 判断当前页面快照里是否已经出现了“通过 captcha 后”的业务证据。
+ *
+ * 为什么这样写：
+ * 真实站点在提交验证码后，URL 或残余文本有时仍像 captcha 页，
+ * 但 4 个下拉框、日期选项或无号提示已经先出现了。
+ * 把这些证据集中抽成纯函数后，CLI 就能优先按“已经过页”处理，而不是继续误等 captcha。
+ *
+ * 输入：
+ * @param {object} status - 归一化后的页面快照。
+ *
+ * 输出：
+ * @returns {boolean} 是否已经具备 post-captcha 证据。
+ *
+ * 注意：
+ * - 该判断比 `reason === "captcha_step"` 更高优先级。
+ * - 这里只判断证据是否存在，不判断最终业务是否有号。
+ */
+function hasPostCaptchaEvidence(status) {
+  const input = status && typeof status === "object" ? status : {};
+  const diagnostics =
+    input.selectionDiagnostics && typeof input.selectionDiagnostics === "object"
+      ? input.selectionDiagnostics
+      : {};
+  const selectionLabelEvidence =
+    input.selectionLabelEvidence && typeof input.selectionLabelEvidence === "object"
+      ? input.selectionLabelEvidence
+      : {};
+  const fields = ["service", "location", "people", "date"];
+
+  if (Array.isArray(input.optionTexts) && input.optionTexts.length > 0) {
+    return true;
+  }
+
+  if (String(input.unavailabilityText || "").trim() !== "") {
+    return true;
+  }
+
+  if (
+    ["selection_step", "date_options_present", "all_dates_reserved"].includes(
+      String(input.reason || "")
+    )
+  ) {
+    return true;
+  }
+
+  if (selectionLabelEvidence.hasStrongEvidence === true) {
+    return true;
+  }
+
+  return fields.some((fieldName) => diagnostics[fieldName] && diagnostics[fieldName].found === true);
 }
 
 module.exports = {
@@ -512,6 +606,7 @@ module.exports = {
   isLikelyCaptchaText,
   normalizeManualCaptchaText,
   normalizeChromeStatus,
+  hasPostCaptchaEvidence,
   resolveCaptchaAnswer,
   resolveCaptchaPromptDecision,
   sanitizeCaptchaText,

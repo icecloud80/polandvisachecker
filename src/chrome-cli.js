@@ -25,6 +25,7 @@ const {
   buildAppleEventsUnavailableMessage,
   buildSchengenRegistrationUrl,
   getMissingValueRetryDelayMs,
+  hasPostCaptchaEvidence,
   isAppleScriptMissingValue,
   isLikelyCaptchaText,
   normalizeChromeStatus,
@@ -1472,6 +1473,99 @@ function saveCaptchaImageFromDataUrl(artifactsDir, captchaDataUrl, attempt) {
 
 /**
  * 作用：
+ * 判断当前页面快照里是否还存在可求解的验证码图像证据。
+ *
+ * 为什么这样写：
+ * 用户反馈的真实问题是：页面肉眼已经进入下一步，但 CLI 还把它当成 captcha 页继续刷新。
+ * 这类误判常见于“旧 reason 还像 captcha_step，但验证码图片本身已经消失”的瞬间。
+ * 抽成纯函数后，主循环就能在刷新前先重新确认是否其实已经过页。
+ *
+ * 输入：
+ * @param {object} snapshot - 当前归一化页面快照。
+ *
+ * 输出：
+ * @returns {boolean} 是否仍有可用的验证码图像证据。
+ *
+ * 注意：
+ * - 这里只检查图像来源，不检查输入框是否存在。
+ * - 任何一个 captcha 变体可用都应视为“仍可求解验证码”。
+ */
+function hasCaptchaImageEvidence(snapshot) {
+  const status = snapshot && typeof snapshot === "object" ? snapshot : {};
+
+  if (String(status.captchaDataUrl || "") !== "") {
+    return true;
+  }
+
+  return Array.isArray(status.captchaDataVariants) && status.captchaDataVariants.length > 0;
+}
+
+/**
+ * 作用：
+ * 判断当前状态是否更像“已离开 captcha，但快照还没稳定”。
+ *
+ * 为什么这样写：
+ * live 页面在 captcha 提交后的短窗口里，可能先移除验证码输入框和图片，
+ * 但页面原因字段还暂时保留为 `captcha_step`。如果此时直接刷新 captcha，
+ * 就会把已经成功的过页状态打断。
+ *
+ * 输入：
+ * @param {object} snapshot - 当前归一化页面快照。
+ *
+ * 输出：
+ * @returns {boolean} 是否应优先重新观察 post-captcha 状态，而不是立刻刷新验证码。
+ *
+ * 注意：
+ * - 只有在 `captcha_step` 且“既无输入框也无图像证据”时才返回 true。
+ * - 这是一个保守的过页保护，不代表最终一定已经成功进入下一页。
+ */
+function shouldRecheckPostSubmitState(snapshot) {
+  const status = snapshot && typeof snapshot === "object" ? snapshot : {};
+
+  return Boolean(
+    status.isCaptchaStep === true &&
+    status.captchaPresent !== true &&
+    !hasCaptchaImageEvidence(status)
+  );
+}
+
+/**
+ * 作用：
+ * 把“captcha UI 已消失”的过渡状态强制提升为 post-captcha 选择页状态。
+ *
+ * 为什么这样写：
+ * 用户已经在真实页面确认：只要出现“captcha UI 已经不见了，需要重查下一页”的瞬间，
+ * 实际上就应该视为已经过了验证码页。继续走 captcha 求解或刷新分支只会把状态搞乱。
+ * 因此这里把这类过渡快照直接提升成 `selection_step`，让主流程立刻进入下一步。
+ *
+ * 输入：
+ * @param {object} snapshot - 当前归一化页面快照。
+ * @param {string} transitionSource - 本次提升的来源标签。
+ *
+ * 输出：
+ * @returns {object} 强制提升后的 post-captcha 页面快照。
+ *
+ * 注意：
+ * - 这里只改页面阶段判断，不伪造日期可用或无号结论。
+ * - 一旦真实页面后续快照拿到更强证据，主流程仍会继续覆盖这个保守状态。
+ */
+function promoteSnapshotToPostCaptchaSelection(snapshot, transitionSource) {
+  const status = snapshot && typeof snapshot === "object" ? snapshot : {};
+
+  return {
+    ...status,
+    reason: "selection_step",
+    isCaptchaStep: false,
+    captchaPresent: false,
+    captchaFilled: false,
+    captchaDataUrl: "",
+    captchaDataVariants: [],
+    postCaptchaTransitionSource: String(transitionSource || "captcha_ui_gone"),
+  };
+}
+
+/**
+ * 作用：
  * 把关键页面状态和业务推断写成 post-captcha 调试证据文件。
  *
  * 为什么这样写：
@@ -1555,6 +1649,43 @@ async function readSnapshotWithCaptchaWait(config) {
 
 /**
  * 作用：
+ * 在提交验证码后持续观察页面是否已经切换到下一步表单。
+ *
+ * 为什么这样写：
+ * 原来的等待逻辑偏向“等 captcha 图挂载出来”，并不适合判断“是否已经过页”。
+ * 提交后单独轮询 post-captcha 证据，才能避免用户明明看到下一页了，terminal 还继续等 captcha。
+ *
+ * 输入：
+ * @param {object} config - 运行配置。
+ *
+ * 输出：
+ * @returns {Promise<object>} 观察窗口结束后的最新页面快照。
+ *
+ * 注意：
+ * - 只要出现下拉页字段、日期选项或无号提示中的任意一个，就会立即返回。
+ * - 若一直没有过页证据，才保守返回最后一次快照。
+ */
+async function readSnapshotAfterCaptchaSubmit(config) {
+  let snapshot = normalizeChromeStatus(await runPageAction(buildSnapshotAction()));
+
+  if (hasPostCaptchaEvidence(snapshot) || !snapshot.isCaptchaStep) {
+    return snapshot;
+  }
+
+  for (let attempt = 1; attempt <= Math.max(4, config.captchaSolveMaxAttempts * 2); attempt += 1) {
+    await sleep(Math.max(500, Math.floor(config.resultDelayMs / 3)));
+    snapshot = normalizeChromeStatus(await runPageAction(buildSnapshotAction()));
+
+    if (hasPostCaptchaEvidence(snapshot) || !snapshot.isCaptchaStep) {
+      return snapshot;
+    }
+  }
+
+  return snapshot;
+}
+
+/**
+ * 作用：
  * 解析一次页面快照，并在需要时完成验证码提交。
  *
  * 为什么这样写：
@@ -1594,13 +1725,25 @@ async function resolveAvailabilityAfterCaptcha(config) {
       return currentSnapshot;
     }
 
+    if (shouldRecheckPostSubmitState(currentSnapshot)) {
+      logStep("captcha UI is no longer visible, rechecking whether the next page has loaded");
+      currentSnapshot = await readSnapshotAfterCaptchaSubmit(config);
+
+      if (hasPostCaptchaEvidence(currentSnapshot) || !currentSnapshot.isCaptchaStep) {
+        return currentSnapshot;
+      }
+
+      logStep("captcha UI is gone, promoting the flow to the post-captcha selection step");
+      return promoteSnapshotToPostCaptchaSelection(currentSnapshot, "initial-loop-recheck");
+    }
+
     if (currentSnapshot.captchaFilled) {
       logStep("captcha field is already filled, submitting the current step");
       await runPageAction(buildSubmitCurrentStepAction());
       await sleep(config.resultDelayMs);
-      currentSnapshot = await readSnapshotWithCaptchaWait(config);
+      currentSnapshot = await readSnapshotAfterCaptchaSubmit(config);
 
-      if (!currentSnapshot.isCaptchaStep) {
+      if (hasPostCaptchaEvidence(currentSnapshot) || !currentSnapshot.isCaptchaStep) {
         return currentSnapshot;
       }
     }
@@ -1639,6 +1782,18 @@ async function resolveAvailabilityAfterCaptcha(config) {
     }
 
     if (!isLikelyCaptchaText(captchaText)) {
+      if (shouldRecheckPostSubmitState(currentSnapshot)) {
+        logStep("captcha candidate is empty and captcha UI is gone, rechecking page state");
+        currentSnapshot = await readSnapshotAfterCaptchaSubmit(config);
+
+        if (hasPostCaptchaEvidence(currentSnapshot) || !currentSnapshot.isCaptchaStep) {
+          return currentSnapshot;
+        }
+
+        logStep("captcha UI is gone after submit, promoting the flow to the post-captcha selection step");
+        return promoteSnapshotToPostCaptchaSelection(currentSnapshot, "empty-candidate-recheck");
+      }
+
       logStep("model did not produce a 4-character captcha candidate, refreshing captcha");
       const refreshResult = await refreshCaptchaWithFallback(
         config,
@@ -1657,9 +1812,9 @@ async function resolveAvailabilityAfterCaptcha(config) {
     await runPageAction(buildSubmitWithCaptchaAction(captchaText));
     logStep(`submitted captcha attempt ${attempt} and waiting for result`);
     await sleep(config.resultDelayMs);
-    currentSnapshot = await readSnapshotWithCaptchaWait(config);
+    currentSnapshot = await readSnapshotAfterCaptchaSubmit(config);
 
-    if (!currentSnapshot.isCaptchaStep) {
+    if (hasPostCaptchaEvidence(currentSnapshot) || !currentSnapshot.isCaptchaStep) {
       return currentSnapshot;
     }
 
@@ -2214,7 +2369,10 @@ module.exports = {
   saveRefreshDiagnosticSnapshotImages,
   selectPreferredCaptchaLabelSource,
   selectBestCaptchaSolverResult,
+  hasCaptchaImageEvidence,
   isConfidentLocalModelAttempt,
+  promoteSnapshotToPostCaptchaSelection,
+  shouldRecheckPostSubmitState,
   waitForCaptchaSignatureChange,
   writeChromeStatusArtifact,
   writeCaptchaCollectionSummary,

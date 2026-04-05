@@ -7,6 +7,7 @@ const {
   buildSchengenRegistrationUrl,
   extractBestCaptchaTextCandidate,
   getMissingValueRetryDelayMs,
+  hasPostCaptchaEvidence,
   isAppleScriptMissingValue,
   isRecoverableMissingValueError,
   isLikelyManualCaptchaText,
@@ -116,6 +117,83 @@ test("extractBestCaptchaTextCandidate prefers exact four-character captcha token
  */
 test("normalizeManualCaptchaText preserves symbol characters", () => {
   assert.equal(normalizeManualCaptchaText("  W2@#  "), "W2@#");
+});
+
+/**
+ * 作用：
+ * 验证字段标签强证据会被归一化并保留下来。
+ *
+ * 为什么这样写：
+ * 当前 post-captcha 的关键修复是“字段标签已出现也算过页”。
+ * 如果归一化时把这层证据丢了，CLI 仍会继续误刷 captcha。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入带标签证据的示例页面快照。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - `hasStrongEvidence` 必须保留。
+ * - 核心字段的布尔值也需要保持稳定结构。
+ */
+test("normalizeChromeStatus preserves strong selection-label evidence", () => {
+  const status = normalizeChromeStatus({
+    reason: "captcha_step",
+    selectionLabelEvidence: {
+      fields: {
+        service: true,
+        location: true,
+        people: true,
+        date: false,
+      },
+      matchedFieldCount: 3,
+      coreFieldCount: 3,
+      hasStrongEvidence: true,
+    },
+  });
+
+  assert.equal(status.selectionLabelEvidence.hasStrongEvidence, true);
+  assert.equal(status.selectionLabelEvidence.fields.service, true);
+  assert.equal(status.selectionLabelEvidence.coreFieldCount, 3);
+});
+
+/**
+ * 作用：
+ * 验证字段标签强证据会让页面被视为已经过了 captcha。
+ *
+ * 为什么这样写：
+ * 用户的真实问题是页面已经到了下一步，但终端还在继续刷新 captcha。
+ * 这条测试锁住新的纯函数判断，避免以后再次退回到只看控件或 URL。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入仍标记为 captcha_step 的示例状态。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 即便 `reason` 还是 `captcha_step`，只要字段标签强证据存在，也应返回 true。
+ * - 这里验证的是“是否过页”，不是最终业务可用性。
+ */
+test("hasPostCaptchaEvidence returns true when strong selection labels are already visible", () => {
+  assert.equal(
+    hasPostCaptchaEvidence({
+      reason: "captcha_step",
+      selectionLabelEvidence: {
+        fields: {
+          service: true,
+          location: true,
+          people: true,
+          date: false,
+        },
+        matchedFieldCount: 3,
+        coreFieldCount: 3,
+        hasStrongEvidence: true,
+      },
+    }),
+    true
+  );
 });
 
 /**
@@ -459,4 +537,63 @@ test("normalizeChromeStatus applies conservative defaults", () => {
   assert.equal(result.selectionDiagnostics.service.controlType, "custom_select");
   assert.deepEqual(result.selectionDiagnostics.service.optionTexts, ["wiza schengen"]);
   assert.equal(result.selectionDiagnostics.location.found, false);
+});
+
+/**
+ * 作用：
+ * 验证 post-captcha 证据判断会优先识别下一页的下拉框和日期提示。
+ *
+ * 为什么这样写：
+ * 这次 live bug 的核心就是：页面其实已经过去了，但 CLI 还按 captcha 页继续等待。
+ * 这条测试锁住“字段证据优先于 captcha 残余迹象”的规则。
+ *
+ * 输入：
+ * @param {object} 无 - 直接构造归一化状态对象。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 当前只要任一关键字段已找到，就应视为已经过页。
+ * - 日期选项和无号提示也都应算作 post-captcha 证据。
+ */
+test("hasPostCaptchaEvidence recognizes selection controls and availability signals", () => {
+  assert.equal(
+    hasPostCaptchaEvidence({
+      reason: "captcha_step",
+      selectionDiagnostics: {
+        service: { found: true },
+      },
+    }),
+    true
+  );
+  assert.equal(
+    hasPostCaptchaEvidence({
+      reason: "captcha_step",
+      optionTexts: ["15.04.2026 09:00"],
+    }),
+    true
+  );
+  assert.equal(
+    hasPostCaptchaEvidence({
+      reason: "captcha_step",
+      unavailabilityText:
+        "Chwilowo wszystkie udostępnione terminy zostały zarezerwowane, prosimy spróbować umówić wizytę w terminie późniejszym",
+    }),
+    true
+  );
+  assert.equal(
+    hasPostCaptchaEvidence({
+      reason: "captcha_step",
+      selectionDiagnostics: {
+        service: { found: false },
+        location: { found: false },
+        people: { found: false },
+        date: { found: false },
+      },
+      optionTexts: [],
+      unavailabilityText: "",
+    }),
+    false
+  );
 });

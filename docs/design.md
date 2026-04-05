@@ -123,6 +123,24 @@
 - Rule: post-captcha field evidence must outrank stale captcha-path evidence.
   Design: `src/chrome-page.js` now evaluates visible `Termin` options, reserved-message text, and selection controls before falling back to `captcha_step`, so a reused `weryfikacja-obrazkowa` URL no longer traps the CLI on the wrong state.
 
+- Rule: captcha submit should be followed by a next-page observation window, not by captcha-only waiting.
+  Design: `src/chrome-cli.js` now calls a dedicated post-submit snapshot poll that keeps checking for selection controls, date options, or reserved-message evidence before deciding the flow is still on captcha.
+
+- Rule: visible next-step field labels should count as post-captcha evidence even before the dropdown controls finish hydrating.
+  Design: `src/chrome-page.js` now extracts `selectionLabelEvidence` from page text for `Rodzaj usługi`, `Lokalizacja`, `Chcę zarezerwować termin dla`, and `Termin`; `src/chrome-utils.js` preserves that evidence in normalized snapshots and lets it short-circuit captcha retry logic.
+
+- Rule: if captcha input and captcha image are both gone after submit, the checker must re-check page state before refreshing captcha.
+  Design: `src/chrome-cli.js` now treats the “reason still says captcha_step, but no captcha UI remains” state as a transient post-submit state and re-runs the post-submit observation window before any refresh attempt.
+
+- Rule: if that transient state still survives the re-check, it should be treated as already past captcha.
+  Design: `src/chrome-cli.js` now force-promotes the snapshot to `selection_step` when captcha input and captcha image are both gone after submit, so the main flow cannot fall back into captcha refresh again.
+
+- Rule: post-captcha custom dropdowns must still be selectable when their DOM exposes almost no surrounding label text.
+  Design: `src/chrome-page.js` now keeps text-based matching as the primary path, but if a visible `mat-select` cannot be matched by context text it falls back to the stable vertical order of the four live controls: service, location, people count, then date.
+
+- Rule: the final “all reserved” Polish sentence must still be recognized when the live page inserts hard line breaks, non-breaking spaces, or diacritic-normalization differences.
+  Design: `src/chrome-page.js` now extracts the unavailable message through three passes: raw-text match, normalized-space match, and diacritic-stripped normalized match.
+
 ## 4. Captcha Design
 
 - Capture source:
@@ -150,7 +168,7 @@
 - Checker-side model behavior:
   score raw and processed captcha variants with the local prototype model, record the per-variant average distance in the attempt log, and submit the lowest-distance local-model guess on each attempt; if the page still rejects it, continue to the next refreshed captcha until the retry limit is reached
 - Post-captcha diagnostic behavior:
-  enrich each page snapshot with `selectionDiagnostics`, including whether each field was found, what control type was matched, the current visible text, and the currently visible option list; write that snapshot to JSON before and after the selection step
+  enrich each page snapshot with `selectionDiagnostics`, including whether each field was found, what control type was matched, the current visible text, and the currently visible option list; also persist `selectionLabelEvidence` so “labels rendered but controls not ready yet” can be distinguished from a true captcha page; write that snapshot to JSON before and after the selection step
 - Diagnostic behavior:
   stay on the captcha page, execute refresh attempts, store the pre/post captcha signatures and images, and persist the chosen refresh target, the broader refresh candidate list, and the raw visible-actionable-control dump for each attempt
 
@@ -222,3 +240,8 @@
 - The current local trainer uses only one preprocessing path; later iterations should compare multiple preprocessing variants and possibly store top-k predictions instead of only the best guess.
 - The checker-side gate currently uses one coarse average-distance threshold and no OCR fallback, so live performance now depends almost entirely on the local model quality and retry count.
 - Even after captcha succeeds, custom Material dropdown markup may still move or rename wrappers, so `selectionDiagnostics` should be treated as the source of truth before changing selector strategy again.
+- The next-step page can render field labels before the underlying dropdown triggers become detectable, so `selectionLabelEvidence` is now the earliest reliable over-page signal and must remain higher priority than stale captcha URL/path hints.
+- The page can briefly report `captcha_step` after submit even though the captcha input and image are already gone, so refresh logic now needs a final post-submit recheck before it is allowed to touch `Odśwież`.
+- If that final recheck still cannot stabilize the next-page evidence in time, the flow now prefers a conservative `selection_step` promotion over another captcha refresh, because the operator has already confirmed this state means the page advanced.
+- The live `mat-select` controls may expose empty text and empty parent/container text, so selector stability now depends on the fixed visual order fallback until a richer label-to-control association is discovered.
+- The final reserved-state sentence can visually match while raw DOM text still differs in whitespace or Unicode form, so unavailable-message extraction now normalizes text before giving up.

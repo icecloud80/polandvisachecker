@@ -44,6 +44,9 @@ test("getPageRuntimeSource includes custom select selectors", () => {
   assert.match(source, /elementMatchesPattern/);
   assert.match(source, /normalizeLooseText/);
   assert.match(source, /collapseAdjacentDuplicateWords/);
+  assert.match(source, /getOrderedVisibleChoiceTriggers/);
+  assert.match(source, /getChoiceFieldOrderIndex/);
+  assert.match(source, /findCustomSelectByFieldOrder/);
 });
 
 /**
@@ -70,12 +73,16 @@ test("getPageRuntimeSource includes Polish field labels and reserved message", (
   assert.match(source, /Rodzaj usługi|rodzaj usługi/i);
   assert.match(source, /Lokalizacja|lokalizacja/i);
   assert.match(source, /Chwilowo wszystkie udostępnione terminy zostały zarezerwowane/i);
+  assert.match(source, /unavailableNormalizedPattern/);
+  assert.match(source, /normalizeLooseText\(normalizedText\)/);
   assert.match(source, /selection_step/);
+  assert.match(source, /getSelectionLabelEvidence/);
   assert.match(source, /getCaptchaDataVariants/);
   assert.match(source, /processed-threshold/);
   assert.match(source, /refreshPattern/);
   assert.match(source, /inspectChoiceField/);
   assert.match(buildSnapshotAction(), /selectionDiagnostics/);
+  assert.match(buildSnapshotAction(), /selectionLabelEvidence/);
 });
 
 /**
@@ -131,6 +138,34 @@ test("buildSelectAction delegates to selectChoiceByText", () => {
 
   assert.match(action, /selectChoiceByText/);
   assert.match(action, /controlType/);
+});
+
+/**
+ * 作用：
+ * 验证自定义下拉在文本匹配失败时会回退到固定顺序映射。
+ *
+ * 为什么这样写：
+ * 这次 live 证据已经证明 4 个 `mat-select` 没有可用标签上下文，
+ * 如果顺序回退逻辑被删掉，post-captcha 页面会再次全部 `not_found`。
+ *
+ * 输入：
+ * @param {object} 无 - 直接检查运行时代码中关键回退调用是否存在。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 这里只锁住源码契约，不执行浏览器内排序逻辑。
+ * - 文本优先策略仍应保留，因此测试只要求回退存在。
+ */
+test("getPageRuntimeSource falls back to field-order mapping for custom selects", () => {
+  const source = getPageRuntimeSource();
+
+  assert.match(source, /return findCustomSelectByFieldOrder\(fieldPattern\)/);
+  assert.match(source, /if \(\/rodzaj\|service\|uslug\/i\.test\(matcherSource\)\)/);
+  assert.match(source, /if \(\/lokalizacja\|location\/i\.test\(matcherSource\)\)/);
+  assert.match(source, /if \(\/rezerwowac\|reserve\|people\|osob\/i\.test\(matcherSource\)\)/);
+  assert.match(source, /if \(\/date\|data\|termin\/i\.test\(matcherSource\)\)/);
 });
 
 /**

@@ -25,6 +25,7 @@ function getPageRuntimeSource() {
         locationPattern: /los angeles/i,
         peoplePattern: /^1\\s*(people|osob.*)$/i,
         unavailablePattern: /chwilowo wszystkie udostępnione terminy zostały zarezerwowane,\\s*prosimy spróbować umówić wizytę w terminie późniejszym|all available dates have been reserved,\\s*please make an appointment at a later date\\.?/i,
+        unavailableNormalizedPattern: /chwilowo wszystkie udostepnione terminy zostaly zarezerwowane, prosimy sprobowac umowic wizyte w terminie pozniejszym|all available dates have been reserved, please make an appointment at a later date\\.?/i,
         imageVerificationPattern: /characters from image|image verification|weryfikacja obrazkowa|znaki z obrazka/i,
         serviceFieldPattern: /rodzaj usługi|rodzaj uslugi|type of service|service/i,
         locationFieldPattern: /lokalizacja|location/i,
@@ -577,7 +578,127 @@ function getPageRuntimeSource() {
           .filter((item) => item.score > 0)
           .sort((left, right) => right.score - left.score);
 
-        return candidates.length ? candidates[0].trigger : null;
+        if (candidates.length) {
+          return candidates[0].trigger;
+        }
+
+        return findCustomSelectByFieldOrder(fieldPattern);
+      }
+
+      /**
+       * 作用：
+       * 获取当前页面里按视觉垂直顺序排列的自定义下拉触发器列表。
+       *
+       * 为什么这样写：
+       * live 页面里的 mat-select 触发器本身几乎不带标签文本，
+       * 所以仅靠上下文文本匹配无法区分 Rodzaj usługi / Lokalizacja / Chcę zarezerwować termin dla / Termin。
+       * 这 4 个控件在页面中是稳定按垂直顺序排列的，因此顺序回退是当前页面最可靠的第二识别面。
+       *
+       * 输入：
+       * 无
+       *
+       * 输出：
+       * @returns {Array<HTMLElement>} 按视觉顺序排列的自定义下拉触发器。
+       *
+       * 注意：
+       * - 这里只在文本匹配失败时作为回退路径使用。
+       * - 排序同时考虑 top 和 left，避免并列布局时顺序抖动。
+       */
+      function getOrderedVisibleChoiceTriggers() {
+        return Array.from(
+          document.querySelectorAll(
+            [
+              "[role='combobox']",
+              "[aria-haspopup='listbox']",
+              ".mat-mdc-select",
+              ".mat-select",
+              "mat-select",
+              ".mdc-select"
+            ].join(", ")
+          )
+        )
+          .filter((element) => element instanceof HTMLElement && isVisible(element))
+          .filter((element, index, list) => list.indexOf(element) === index)
+          .sort((left, right) => {
+            const leftRect = left.getBoundingClientRect();
+            const rightRect = right.getBoundingClientRect();
+
+            if (Math.abs(leftRect.top - rightRect.top) > 6) {
+              return leftRect.top - rightRect.top;
+            }
+
+            return leftRect.left - rightRect.left;
+          });
+      }
+
+      /**
+       * 作用：
+       * 把业务字段模式映射到当前固定预约页中的下拉顺序索引。
+       *
+       * 为什么这样写：
+       * 当前页面结构固定为 4 个字段自上而下依次排列。
+       * 当 DOM 不给标签上下文时，只能依赖这个稳定顺序把字段和控件重新对应起来。
+       *
+       * 输入：
+       * @param {RegExp|string} fieldPattern - 字段匹配模式。
+       *
+       * 输出：
+       * @returns {number} 对应顺序索引；无法识别时返回 -1。
+       *
+       * 注意：
+       * - 这是当前 Los Angeles Schengen 页的定制回退规则。
+       * - 如果字段顺序将来改版，这里必须同步更新。
+       */
+      function getChoiceFieldOrderIndex(fieldPattern) {
+        const matcherSource =
+          fieldPattern instanceof RegExp ? String(fieldPattern.source || "") : String(fieldPattern || "");
+
+        if (/rodzaj|service|uslug/i.test(matcherSource)) {
+          return 0;
+        }
+
+        if (/lokalizacja|location/i.test(matcherSource)) {
+          return 1;
+        }
+
+        if (/rezerwowac|reserve|people|osob/i.test(matcherSource)) {
+          return 2;
+        }
+
+        if (/date|data|termin/i.test(matcherSource)) {
+          return 3;
+        }
+
+        return -1;
+      }
+
+      /**
+       * 作用：
+       * 在文本匹配失败时，按页面固定顺序回退选择自定义下拉触发器。
+       *
+       * 为什么这样写：
+       * 当前 live 页面已经证明：4 个 mat-select 能被看到，但它们附近的上下文文本抓不到。
+       * 继续只靠文本会永久 not_found，所以必须用“第 1 个是服务、第 2 个是地点、第 3 个是人数、第 4 个是日期”的回退映射。
+       *
+       * 输入：
+       * @param {RegExp|string} fieldPattern - 字段匹配模式。
+       *
+       * 输出：
+       * @returns {HTMLElement | null} 通过顺序回退命中的触发器。
+       *
+       * 注意：
+       * - 只有在可见自定义下拉数量足够时才会命中。
+       * - 这是字段文本回退失败后的保守路径，不应替代文本优先策略。
+       */
+      function findCustomSelectByFieldOrder(fieldPattern) {
+        const orderedTriggers = getOrderedVisibleChoiceTriggers();
+        const fieldIndex = getChoiceFieldOrderIndex(fieldPattern);
+
+        if (fieldIndex < 0 || orderedTriggers.length <= fieldIndex) {
+          return null;
+        }
+
+        return orderedTriggers[fieldIndex];
       }
 
       function getVisibleChoiceOptions() {
@@ -930,10 +1051,47 @@ function getPageRuntimeSource() {
         return variants;
       }
 
+      /**
+       * 作用：
+       * 从页面正文里提取“当前没有预约号”的最终提示文案。
+       *
+       * 为什么这样写：
+       * live 页面里的这句 Polish 文案可能被换行、非断空格或 Unicode 组合字符打断。
+       * 仅靠原始字符串正则会漏掉肉眼已经清楚可见的最终状态。
+       * 因此这里同时在原文、空白归一化文本、去重音归一化文本上做匹配，
+       * 保证只要页面已经出现这句无号提示，CLI 就能稳定识别到。
+       *
+       * 输入：
+       * @param {string} pageText - 当前页面原始全文本。
+       *
+       * 输出：
+       * @returns {string} 命中的无号提示文案；未命中时返回空串。
+       *
+       * 注意：
+       * - 返回值优先保留用户可见的原始文案，其次才是归一化文案。
+       * - 这条逻辑是最终结果识别的关键，不要退回到只匹配原始字符串。
+       */
       function getUnavailableMessage(pageText) {
-        const match = String(pageText || "").match(CONFIG.unavailablePattern);
+        const rawText = String(pageText || "");
+        const normalizedText = normalizeText(rawText);
+        const looseText = normalizeLooseText(normalizedText);
+        const rawMatch = rawText.match(CONFIG.unavailablePattern);
+        const normalizedMatch = normalizedText.match(CONFIG.unavailablePattern);
+        const looseMatch = looseText.match(CONFIG.unavailableNormalizedPattern);
 
-        return match ? String(match[0] || "").trim() : "";
+        if (rawMatch) {
+          return String(rawMatch[0] || "").trim();
+        }
+
+        if (normalizedMatch) {
+          return String(normalizedMatch[0] || "").trim();
+        }
+
+        if (looseMatch) {
+          return String(looseMatch[0] || "").trim();
+        }
+
+        return "";
       }
 
       function hasSelectionControls() {
@@ -952,6 +1110,44 @@ function getPageRuntimeSource() {
         });
       }
 
+      /**
+       * 作用：
+       * 提取“验证码之后的下拉页字段标签”是否已经出现在页面文本中。
+       *
+       * 为什么这样写：
+       * 真实站点在 captcha 通过后的短时间内，字段标签往往先渲染出来，
+       * 但自定义下拉控件本体可能还没完全挂载到当前选择器能命中的状态。
+       * 仅靠控件探测会让 CLI 误以为还停留在 captcha 页，继续刷新验证码。
+       *
+       * 输入：
+       * @param {string} pageText - 当前页面全文本。
+       *
+       * 输出：
+       * @returns {object} 字段标签命中情况摘要。
+       *
+       * 注意：
+       * - 这里的标签证据只用于“是否已经过页”的判断，不直接代表控件可操作。
+       * - 核心字段至少包括 service、location、people，date 作为补充证据保留。
+       */
+      function getSelectionLabelEvidence(pageText) {
+        const normalizedPageText = normalizeText(pageText);
+        const fields = {
+          service: CONFIG.serviceFieldPattern.test(normalizedPageText),
+          location: CONFIG.locationFieldPattern.test(normalizedPageText),
+          people: CONFIG.peopleFieldPattern.test(normalizedPageText),
+          date: CONFIG.dateFieldPattern.test(normalizedPageText)
+        };
+        const matchedFieldCount = Object.values(fields).filter((value) => value === true).length;
+        const coreFieldCount = [fields.service, fields.location, fields.people].filter((value) => value === true).length;
+
+        return {
+          fields,
+          matchedFieldCount,
+          coreFieldCount,
+          hasStrongEvidence: coreFieldCount >= 3
+        };
+      }
+
       function readAvailability() {
         const iframeList = Array.from(document.querySelectorAll("iframe"));
         const hasIncapsulaIframe = iframeList.some((frame) => /_incapsula_resource/i.test(String(frame.getAttribute("src") || "")));
@@ -959,6 +1155,7 @@ function getPageRuntimeSource() {
         const currentPath = String(window.location.pathname || "");
         const unavailableMessage = getUnavailableMessage(document.body ? document.body.innerText : "");
         const selectionControlsPresent = hasSelectionControls();
+        const selectionLabelEvidence = getSelectionLabelEvidence(document.body ? document.body.innerText : "");
         const optionTexts = getChoiceOptionTextsForField(CONFIG.dateFieldPattern);
 
         if (hasIncapsulaIframe || /request unsuccessful|incapsula incident id|imperva/i.test(pageText)) {
@@ -1007,7 +1204,7 @@ function getPageRuntimeSource() {
           };
         }
 
-        if (selectionControlsPresent) {
+        if (selectionControlsPresent || selectionLabelEvidence.hasStrongEvidence) {
           return {
             isAvailable: false,
             reason: "selection_step",
@@ -1098,6 +1295,7 @@ function getPageRuntimeSource() {
         fillCaptcha,
         submitCurrentStep,
         readAvailability,
+        getSelectionLabelEvidence,
         CONFIG
       };
     })();
@@ -1263,6 +1461,7 @@ function buildSnapshotAction() {
       date: runtime.inspectChoiceField(runtime.CONFIG.dateFieldPattern, true)
     };
     const pageText = String(document.body ? document.body.innerText : "");
+    const selectionLabelEvidence = runtime.getSelectionLabelEvidence(pageText);
     const visibleInputs = Array.from(document.querySelectorAll("input, textarea"))
       .filter((element) => {
         const style = window.getComputedStyle(element);
@@ -1306,7 +1505,8 @@ function buildSnapshotAction() {
       inputHints: visibleInputs,
       buttonTexts: visibleButtons,
       likelyCaptchaError: /bledne|błędne|niepoprawne|incorrect|invalid/i.test(pageText),
-      selectionDiagnostics
+      selectionDiagnostics,
+      selectionLabelEvidence
     };
   `;
 }

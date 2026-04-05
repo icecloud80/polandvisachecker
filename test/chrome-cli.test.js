@@ -13,6 +13,7 @@ const {
   createCaptchaCollectionRunContext,
   createRefreshDiagnosticRunContext,
   getCaptchaSnapshotSignature,
+  hasCaptchaImageEvidence,
   hasFreshCaptchaSnapshot,
   hasUsableRefreshClickPoint,
   isChromeTabNotFoundError,
@@ -22,6 +23,8 @@ const {
   selectPreferredCaptchaLabelSource,
   selectBestCaptchaSolverResult,
   isConfidentLocalModelAttempt,
+  promoteSnapshotToPostCaptchaSelection,
+  shouldRecheckPostSubmitState,
   summarizeSnapshotForRefreshDiagnostic,
   writeChromeStatusArtifact,
   writeCaptchaCollectionSummary,
@@ -310,6 +313,123 @@ test("hasUsableRefreshClickPoint only accepts refresh targets with numeric coord
   );
   assert.equal(hasUsableRefreshClickPoint({ clickPoint: { x: null, y: 240 } }), false);
   assert.equal(hasUsableRefreshClickPoint({}), false);
+});
+
+/**
+ * 作用：
+ * 验证验证码图像证据判断会同时识别主图和变体图。
+ *
+ * 为什么这样写：
+ * 提交后的保护逻辑要先判断“当前还有没有 captcha 可解”。
+ * 只有图像和输入框都消失时，CLI 才应该优先重看是否已经过页。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入不同形态的页面快照。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 主图和变体任一存在都应返回 true。
+ * - 二者都为空时才应返回 false。
+ */
+test("hasCaptchaImageEvidence accepts both primary and variant captcha sources", () => {
+  assert.equal(hasCaptchaImageEvidence({ captchaDataUrl: "data:image/png;base64,AAAA" }), true);
+  assert.equal(
+    hasCaptchaImageEvidence({
+      captchaDataVariants: [{ label: "processed-threshold", dataUrl: "data:image/png;base64,BBBB" }],
+    }),
+    true
+  );
+  assert.equal(hasCaptchaImageEvidence({ captchaDataUrl: "", captchaDataVariants: [] }), false);
+});
+
+/**
+ * 作用：
+ * 验证提交后的过页保护会拦住“captcha UI 已消失但 reason 还没更新”的状态。
+ *
+ * 为什么这样写：
+ * 用户已经在 live 页面上看到下一页时，CLI 仍可能短暂拿到旧的 `captcha_step`。
+ * 这条测试锁住新的保护条件，避免此时继续刷新验证码打断已经成功的过页。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入示例页面快照。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 只有在 `captcha_step` 且无输入框、无图像证据时才应返回 true。
+ * - 仍有 captcha 输入框或图像时不能误判成过页保护状态。
+ */
+test("shouldRecheckPostSubmitState detects captcha-step snapshots with no remaining captcha UI", () => {
+  assert.equal(
+    shouldRecheckPostSubmitState({
+      isCaptchaStep: true,
+      captchaPresent: false,
+      captchaDataUrl: "",
+      captchaDataVariants: [],
+    }),
+    true
+  );
+  assert.equal(
+    shouldRecheckPostSubmitState({
+      isCaptchaStep: true,
+      captchaPresent: true,
+      captchaDataUrl: "",
+      captchaDataVariants: [],
+    }),
+    false
+  );
+  assert.equal(
+    shouldRecheckPostSubmitState({
+      isCaptchaStep: true,
+      captchaPresent: false,
+      captchaDataUrl: "data:image/png;base64,AAAA",
+      captchaDataVariants: [],
+    }),
+    false
+  );
+});
+
+/**
+ * 作用：
+ * 验证“captcha UI 已消失”的过渡状态会被强制提升为选择页。
+ *
+ * 为什么这样写：
+ * 这是用户刚刚明确要求锁死的新规则。
+ * 一旦 CLI 进入这条分支，就不能再继续刷新 captcha，而要直接进入 post-captcha 逻辑。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入示例 captcha 过渡快照。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 这里只提升到 `selection_step`，不伪造最终可用性结果。
+ * - captcha 图像和输入框状态应一并清空，防止主流程重新回到 captcha 分支。
+ */
+test("promoteSnapshotToPostCaptchaSelection converts the captcha transition state into selection_step", () => {
+  const promoted = promoteSnapshotToPostCaptchaSelection(
+    {
+      reason: "captcha_step",
+      isCaptchaStep: true,
+      captchaPresent: false,
+      captchaFilled: false,
+      captchaDataUrl: "",
+      captchaDataVariants: [],
+      pageUrl: "https://secure.e-konsulat.gov.pl/example",
+    },
+    "empty-candidate-recheck"
+  );
+
+  assert.equal(promoted.reason, "selection_step");
+  assert.equal(promoted.isCaptchaStep, false);
+  assert.equal(promoted.captchaPresent, false);
+  assert.equal(promoted.captchaDataUrl, "");
+  assert.deepEqual(promoted.captchaDataVariants, []);
+  assert.equal(promoted.postCaptchaTransitionSource, "empty-candidate-recheck");
 });
 
 /**
