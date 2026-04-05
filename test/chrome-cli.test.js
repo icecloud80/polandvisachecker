@@ -23,6 +23,7 @@ const {
   selectBestCaptchaSolverResult,
   isConfidentLocalModelAttempt,
   summarizeSnapshotForRefreshDiagnostic,
+  writeChromeStatusArtifact,
   writeCaptchaCollectionSummary,
   writeRefreshDiagnosticRecord,
   writeRefreshDiagnosticSummary,
@@ -337,7 +338,7 @@ test("isConfidentLocalModelAttempt accepts only low-distance local model guesses
         averageDistance: 31.5,
       },
       {
-        localCaptchaModelMaxAverageDistance: 35,
+        localCaptchaModelMaxAverageDistance: 50,
       }
     ),
     true
@@ -346,10 +347,10 @@ test("isConfidentLocalModelAttempt accepts only low-distance local model guesses
     isConfidentLocalModelAttempt(
       {
         candidate: "A8Bd",
-        averageDistance: 44.2,
+        averageDistance: 54.2,
       },
       {
-        localCaptchaModelMaxAverageDistance: 35,
+        localCaptchaModelMaxAverageDistance: 50,
       }
     ),
     false
@@ -365,14 +366,14 @@ test("isConfidentLocalModelAttempt accepts only low-distance local model guesses
  * 测试需要锁住“模型足够稳时由它优先提交”的策略。
  *
  * 输入：
- * @param {object} 无 - 直接传入示例本地模型和 OCR 尝试结果。
+ * @param {object} 无 - 直接传入示例本地模型尝试结果。
  *
  * 输出：
  * @returns {void} 无返回值。
  *
  * 注意：
- * - 当前优先级是“高置信本地模型”高于“看起来可提交的 OCR”。
- * - 返回值里的 attempts 应保留两类尝试，方便日志排查。
+ * - 当前优先级是“高置信本地模型”高于其他本地模型结果。
+ * - 返回值里的 attempts 现在只包含本地模型尝试。
  */
 test("selectBestCaptchaSolverResult prefers a confident local model attempt", () => {
   const result = selectBestCaptchaSolverResult(
@@ -384,43 +385,35 @@ test("selectBestCaptchaSolverResult prefers a confident local model attempt", ()
         isConfident: true,
       },
     ],
-    [
-      {
-        engine: "tesseract",
-        candidate: "AB8d",
-        confidence: 88,
-        isLikely: true,
-      },
-    ],
     {
-      localCaptchaModelMaxAverageDistance: 35,
+      localCaptchaModelMaxAverageDistance: 50,
     }
   );
 
   assert.equal(result.captchaText, "A8Bd");
   assert.equal(result.winningAttempt.engine, "local-model");
-  assert.equal(result.attempts.length, 2);
+  assert.equal(result.attempts.length, 1);
 });
 
 /**
  * 作用：
- * 验证当本地模型不够稳时，会退回到 OCR 的可提交候选值。
+ * 验证当没有高置信本地模型结果时，会退回到距离最低的本地模型猜测。
  *
  * 为什么这样写：
- * 第一版上线策略不是强行全量替换 OCR。
- * 这条测试锁住保守回退行为，避免新模型把现有可用 OCR 结果盖掉。
+ * 用户已经要求移除 Tesseract。
+ * 这条测试锁住新的 live checker 策略，避免后续又悄悄把 OCR 回退带回来。
  *
  * 输入：
- * @param {object} 无 - 直接传入示例本地模型和 OCR 尝试结果。
+ * @param {object} 无 - 直接传入示例本地模型尝试结果。
  *
  * 输出：
  * @returns {void} 无返回值。
  *
  * 注意：
- * - 当前只要本地模型没过距离阈值，就允许 OCR 兜底。
- * - 这能减少 live checker 初次集成时的回归风险。
+ * - 当前即使都不达标，也会提交距离最低的本地模型结果。
+ * - 该策略依赖多轮重试来弥补单轮错误。
  */
-test("selectBestCaptchaSolverResult falls back to OCR when the local model is not confident", () => {
+test("selectBestCaptchaSolverResult falls back to the lowest-distance local model attempt", () => {
   const result = selectBestCaptchaSolverResult(
     [
       {
@@ -429,22 +422,20 @@ test("selectBestCaptchaSolverResult falls back to OCR when the local model is no
         averageDistance: 46.2,
         isConfident: false,
       },
-    ],
-    [
       {
-        engine: "tesseract",
-        candidate: "AB8d",
-        confidence: 88,
-        isLikely: true,
+        engine: "local-model",
+        candidate: "Qm9=",
+        averageDistance: 52.4,
+        isConfident: false,
       },
     ],
     {
-      localCaptchaModelMaxAverageDistance: 35,
+      localCaptchaModelMaxAverageDistance: 50,
     }
   );
 
-  assert.equal(result.captchaText, "AB8d");
-  assert.equal(result.winningAttempt.engine, "tesseract");
+  assert.equal(result.captchaText, "A8Bd");
+  assert.equal(result.winningAttempt.engine, "local-model");
 });
 
 /**
@@ -671,6 +662,55 @@ test("writeCaptchaCollectionSummary persists batch-level collection stats as JSO
   writeCaptchaCollectionSummary(summaryPath, summary);
 
   assert.deepEqual(JSON.parse(fs.readFileSync(summaryPath, "utf8")), summary);
+});
+
+/**
+ * 作用：
+ * 验证 post-captcha 页面证据会被写成独立 JSON 文件。
+ *
+ * 为什么这样写：
+ * 现在最大的排障点是验证码之后的下拉页。
+ * 这条测试锁住 artifact 写盘契约，避免后续排查时丢失关键快照和选择动作结果。
+ *
+ * 输入：
+ * @param {object} 无 - 在临时目录写入示例状态快照。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 文件名应带上阶段标签。
+ * - 内容必须保留 snapshot 和 extra 两层。
+ */
+test("writeChromeStatusArtifact persists a post-captcha debug snapshot", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "poland-status-artifact-"));
+  const outputPath = writeChromeStatusArtifact(
+    tempDir,
+    "post-captcha-after-selection",
+    {
+      reason: "selection_step",
+      pageUrl: "https://secure.e-konsulat.gov.pl/example",
+      selectionDiagnostics: {
+        service: {
+          found: true,
+          controlType: "custom_select",
+        },
+      },
+    },
+    {
+      selectionResults: {
+        service: {
+          changed: true,
+        },
+      },
+    }
+  );
+
+  const payload = JSON.parse(fs.readFileSync(outputPath, "utf8"));
+
+  assert.match(path.basename(outputPath), /post-captcha-after-selection/);
+  assert.equal(payload.snapshot.reason, "selection_step");
+  assert.equal(payload.extra.selectionResults.service.changed, true);
 });
 
 /**

@@ -422,6 +422,41 @@ function getMissingValueRetryDelayMs(attempt) {
  */
 function normalizeChromeStatus(payload) {
   const input = payload && typeof payload === "object" ? payload : {};
+  const selectionDiagnostics =
+    input.selectionDiagnostics && typeof input.selectionDiagnostics === "object"
+      ? input.selectionDiagnostics
+      : {};
+
+  /**
+   * 作用：
+   * 归一化单个下拉字段诊断对象。
+   *
+   * 为什么这样写：
+   * post-captcha 页面调试需要稳定结构。
+   * 即使页面侧少回了某个字段，CLI 也应该拿到可预期的默认值。
+   *
+   * 输入：
+   * @param {object} value - 页面侧返回的单字段诊断对象。
+   *
+   * 输出：
+   * @returns {object} 归一化后的字段诊断对象。
+   *
+   * 注意：
+   * - 这里只做结构兜底，不改变业务文本内容。
+   * - optionTexts 始终归一化成数组。
+   */
+  function normalizeSelectionField(value) {
+    const field = value && typeof value === "object" ? value : {};
+
+    return {
+      found: field.found === true,
+      controlType: String(field.controlType || "not_found"),
+      currentText: String(field.currentText || ""),
+      optionTexts: Array.isArray(field.optionTexts) ? field.optionTexts : [],
+      contextText: String(field.contextText || ""),
+      element: field.element && typeof field.element === "object" ? field.element : null,
+    };
+  }
 
   return {
     isAvailable: input.isAvailable === true,
@@ -454,6 +489,12 @@ function normalizeChromeStatus(payload) {
     isCaptchaStep: input.reason === "captcha_step",
     likelyCaptchaError: input.likelyCaptchaError === true,
     bodyTextTailSample: String(input.bodyTextTailSample || ""),
+    selectionDiagnostics: {
+      service: normalizeSelectionField(selectionDiagnostics.service),
+      location: normalizeSelectionField(selectionDiagnostics.location),
+      people: normalizeSelectionField(selectionDiagnostics.people),
+      date: normalizeSelectionField(selectionDiagnostics.date),
+    },
   };
 }
 

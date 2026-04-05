@@ -6,6 +6,7 @@ const {
   buildRefreshCaptchaClickPointAction,
   buildRefreshCaptchaAction,
   buildSelectAction,
+  buildSnapshotAction,
   buildSubmitCurrentStepAction,
   buildSwitchEnglishAction,
   getPageRuntimeSource,
@@ -73,6 +74,39 @@ test("getPageRuntimeSource includes Polish field labels and reserved message", (
   assert.match(source, /getCaptchaDataVariants/);
   assert.match(source, /processed-threshold/);
   assert.match(source, /refreshPattern/);
+  assert.match(source, /inspectChoiceField/);
+  assert.match(buildSnapshotAction(), /selectionDiagnostics/);
+});
+
+/**
+ * 作用：
+ * 验证页面状态判定会优先认定 post-captcha 下拉页，而不是被 captcha 路径误导。
+ *
+ * 为什么这样写：
+ * 真实站点在通过验证码后，URL 仍可能保留 `weryfikacja-obrazkowa`。
+ * 如果判断顺序错了，CLI 会把下一页误判成 `captcha_step`，导致终端继续等待。
+ *
+ * 输入：
+ * @param {object} 无 - 直接检查运行时代码中关键判断片段的先后顺序。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 这里只锁住顺序，不执行浏览器内逻辑。
+ * - `selection_step` 和 `date_options_present` 都必须先于 `captcha_step` 判断。
+ */
+test("getPageRuntimeSource prioritizes selection evidence before captcha-step detection", () => {
+  const source = getPageRuntimeSource();
+  const selectionIndex = source.indexOf('reason: "selection_step"');
+  const availableIndex = source.indexOf('reason: "date_options_present"');
+  const captchaIndex = source.indexOf('reason: "captcha_step"');
+
+  assert.ok(selectionIndex >= 0);
+  assert.ok(availableIndex >= 0);
+  assert.ok(captchaIndex >= 0);
+  assert.ok(selectionIndex < captchaIndex);
+  assert.ok(availableIndex < captchaIndex);
 });
 
 /**

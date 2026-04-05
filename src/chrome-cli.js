@@ -5,7 +5,6 @@ const crypto = require("node:crypto");
 const { setTimeout: sleep } = require("node:timers/promises");
 
 const dotenv = require("dotenv");
-const { createWorker } = require("tesseract.js");
 
 const {
   clickChromeScreenPoint,
@@ -23,10 +22,8 @@ const {
   buildSubmitWithCaptchaAction,
 } = require("./chrome-page");
 const {
-  CAPTCHA_ALLOWED_CHARACTERS,
   buildAppleEventsUnavailableMessage,
   buildSchengenRegistrationUrl,
-  extractBestCaptchaTextCandidate,
   getMissingValueRetryDelayMs,
   isAppleScriptMissingValue,
   isLikelyCaptchaText,
@@ -111,7 +108,7 @@ function loadChromeCliConfig() {
  * @returns {object|null} 已加载的模型对象；不可用时返回 null。
  *
  * 注意：
- * - 模型文件缺失时不会抛错打断主流程，而是回退到 Tesseract。
+ * - 模型文件缺失时不会抛错打断主流程，而是保守返回 null。
  * - 配置对象会被附加 `_localCaptchaModel` 缓存字段。
  */
 function getLocalCaptchaModel(config) {
@@ -133,11 +130,11 @@ function getLocalCaptchaModel(config) {
 
 /**
  * 作用：
- * 判断本地模型预测结果是否足够可信，可以优先于 Tesseract 提交。
+ * 判断本地模型预测结果是否足够可信。
  *
  * 为什么这样写：
  * 原型模型总会给出 4 位输出，因此 checker 不能把“有输出”直接等价成“可信”。
- * 这里用训练后观察到的平均距离阈值做第一版门槛，减少明显错猜被直接提交。
+ * 这里用训练后观察到的平均距离阈值做第一版门槛，帮助我们在日志里区分“相对更稳”和“明显发散”的预测。
  *
  * 输入：
  * @param {object} attempt - 本地模型预测结果。
@@ -147,7 +144,7 @@ function getLocalCaptchaModel(config) {
  * @returns {boolean} 是否达到优先提交阈值。
  *
  * 注意：
- * - 当前阈值默认 35，来自现有验证集的粗分布，不是严格概率。
+ * - 当前阈值默认 50，来自现有 live 迭代策略，不是严格概率。
  * - 若后续模型结构变化，需要同步重新校准这个阈值。
  */
 function isConfidentLocalModelAttempt(attempt, config) {
@@ -155,7 +152,7 @@ function isConfidentLocalModelAttempt(attempt, config) {
     attempt &&
     String(attempt.candidate || "").length === 4 &&
     Number(attempt.averageDistance || Number.POSITIVE_INFINITY) <=
-      Number(config.localCaptchaModelMaxAverageDistance || 35)
+      Number(config.localCaptchaModelMaxAverageDistance || 50)
   );
 }
 
@@ -450,39 +447,56 @@ async function driveChromeToRegistrationEntry(config) {
  * @param {object} config - 运行配置。
  *
  * 输出：
- * @returns {Promise<void>} 后续字段填写完成后的 Promise。
+ * @returns {Promise<object>} 每一步选择动作的结果对象。
  *
  * 注意：
  * - 每一步之间都保留等待，给 Angular 页面联动渲染留时间。
  */
 async function fillPostCaptchaSelections(config) {
+  const result = {
+    service: null,
+    location: null,
+    people: null,
+  };
+
   logStep("selecting service");
-  await runPageAction(
+  result.service = await runPageAction(
     buildSelectAction(
       "runtime.CONFIG.serviceFieldPattern",
       "runtime.CONFIG.servicePattern",
       "selectService"
     )
   );
+  if (!result.service.changed) {
+    logStep(`service selection did not change the page (${result.service.controlType})`);
+  }
   await sleep(config.chromeStepDelayMs);
   logStep("selecting location");
-  await runPageAction(
+  result.location = await runPageAction(
     buildSelectAction(
       "runtime.CONFIG.locationFieldPattern",
       "runtime.CONFIG.locationPattern",
       "selectLocation"
     )
   );
+  if (!result.location.changed) {
+    logStep(`location selection did not change the page (${result.location.controlType})`);
+  }
   await sleep(config.chromeStepDelayMs);
   logStep("selecting people count");
-  await runPageAction(
+  result.people = await runPageAction(
     buildSelectAction(
       "runtime.CONFIG.peopleFieldPattern",
       "runtime.CONFIG.peoplePattern",
       "selectPeople"
     )
   );
+  if (!result.people.changed) {
+    logStep(`people selection did not change the page (${result.people.controlType})`);
+  }
   await sleep(config.chromeStepDelayMs);
+
+  return result;
 }
 
 /**
@@ -1388,63 +1402,6 @@ async function refreshCaptchaWithFallback(config, previousSignature, options = {
 
 /**
  * 作用：
- * 对单个 OCR 图像来源执行一轮识别，并提炼出最适合提交的验证码候选值。
- *
- * 为什么这样写：
- * OCR 原始文本经常比真实验证码长，集中在这里做 whitelist 配置、识别和候选值提炼，
- * 主流程就能只关心“这轮识别拿到了什么候选值”。
- *
- * 输入：
- * @param {object} worker - Tesseract worker 实例。
- * @param {object} source - 当前 OCR 图像来源。
- * @param {string} passLabel - 当前 OCR 通道标签。
- * @param {boolean} useWhitelist - 是否启用验证码字符白名单。
- *
- * 输出：
- * @returns {Promise<object>} 当前 OCR 结果对象。
- *
- * 注意：
- * - 当前只切换 whitelist，不在这里切分更多 Tesseract 模型。
- * - candidate 可能少于 4 位，调用方需要继续重试。
- */
-async function recognizeCaptchaSource(worker, source, passLabel, useWhitelist) {
-  try {
-    await worker.setParameters({
-      tessedit_char_whitelist: useWhitelist ? CAPTCHA_ALLOWED_CHARACTERS : "",
-    });
-
-    const {
-      data: { text, confidence },
-    } = await worker.recognize(source.dataUrl);
-
-    const rawText = String(text || "");
-    const candidate = extractBestCaptchaTextCandidate(rawText);
-
-    return {
-      engine: "tesseract",
-      sourceLabel: source.label,
-      passLabel,
-      rawText,
-      candidate,
-      confidence: Number(confidence || 0),
-      isLikely: isLikelyCaptchaText(candidate),
-    };
-  } catch (error) {
-    return {
-      engine: "tesseract",
-      sourceLabel: source && source.label ? source.label : "unknown-source",
-      passLabel: `${passLabel}-error`,
-      rawText: "",
-      candidate: "",
-      confidence: 0,
-      isLikely: false,
-      error: String(error.message || error),
-    };
-  }
-}
-
-/**
- * 作用：
  * 用本地 captcha 模型识别页面返回的验证码图像。
  *
  * 为什么这样写：
@@ -1515,6 +1472,44 @@ function saveCaptchaImageFromDataUrl(artifactsDir, captchaDataUrl, attempt) {
 
 /**
  * 作用：
+ * 把关键页面状态和业务推断写成 post-captcha 调试证据文件。
+ *
+ * 为什么这样写：
+ * 现在 captcha 已经能过去，新的主要问题变成“后续页面为什么没选上 / 没读出来”。
+ * 把过页后的快照、选择动作结果和最终推断统一落盘后，下一轮排障就不需要再猜。
+ *
+ * 输入：
+ * @param {string} artifactsDir - 产物目录。
+ * @param {string} stageLabel - 当前证据阶段名称。
+ * @param {object} snapshot - 当前归一化页面快照。
+ * @param {object} extraPayload - 额外上下文信息。
+ *
+ * 输出：
+ * @returns {string} 已写入的 JSON 文件路径。
+ *
+ * 注意：
+ * - 该文件会包含页面文本摘要，但不包含完整 base64 captcha 图。
+ * - stageLabel 会进入文件名，请保持简短稳定。
+ */
+function writeChromeStatusArtifact(artifactsDir, stageLabel, snapshot, extraPayload = {}) {
+  const safeStageLabel = sanitizeFileNamePart(stageLabel);
+  const outputPath = path.join(
+    artifactsDir,
+    `chrome-status-${Date.now()}-${safeStageLabel}.json`
+  );
+  const payload = {
+    capturedAt: new Date().toISOString(),
+    stage: safeStageLabel,
+    snapshot,
+    extra: extraPayload && typeof extraPayload === "object" ? extraPayload : {},
+  };
+
+  fs.writeFileSync(outputPath, `${JSON.stringify(payload, null, 2)}\n`);
+  return outputPath;
+}
+
+/**
+ * 作用：
  * 读取当前页面快照，并在验证码图片尚未挂到 DOM 时做短暂补偿等待。
  *
  * 为什么这样写：
@@ -1563,7 +1558,7 @@ async function readSnapshotWithCaptchaWait(config) {
  * 解析一次页面快照，并在需要时完成验证码提交。
  *
  * 为什么这样写：
- * 把 OCR、人工回退和提交集中在一起，主检查流程只需关心最终状态。
+ * 把 captcha 求解、自动提交和重试集中在一起，主检查流程只需关心最终状态。
  *
  * 输入：
  * @param {object} config - 运行配置。
@@ -1573,7 +1568,7 @@ async function readSnapshotWithCaptchaWait(config) {
  *
  * 注意：
  * - 如果页面已经直接出现预约日期，不会再触发验证码提交流程。
- * - 当前策略不会因为 OCR 偏弱而等待人工输入。
+ * - 当前策略不会等待人工输入，而是持续提交本地模型结果并重试。
  */
 async function resolveAvailabilityAfterCaptcha(config) {
   let currentSnapshot = await readSnapshotWithCaptchaWait(config);
@@ -1594,7 +1589,7 @@ async function resolveAvailabilityAfterCaptcha(config) {
     return currentSnapshot;
   }
 
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= Math.max(1, config.captchaSolveMaxAttempts); attempt += 1) {
     if (!currentSnapshot.isCaptchaStep && !currentSnapshot.captchaPresent) {
       return currentSnapshot;
     }
@@ -1610,20 +1605,20 @@ async function resolveAvailabilityAfterCaptcha(config) {
       }
     }
 
-    const ocrResult = await solveCaptchaFromPageData(
+    const solverResult = await solveCaptchaFromPageData(
       config,
       currentSnapshot.captchaDataUrl,
       currentSnapshot.captchaDataVariants
     );
-    const captchaText = sanitizeCaptchaText(ocrResult.captchaText);
+    const captchaText = sanitizeCaptchaText(solverResult.captchaText);
     const captchaImagePath = saveCaptchaImageFromDataUrl(
       config.artifactsDir,
       currentSnapshot.captchaDataUrl,
       attempt
     );
 
-    if (Array.isArray(ocrResult.attempts) && ocrResult.attempts.length > 0) {
-      const summary = ocrResult.attempts
+    if (Array.isArray(solverResult.attempts) && solverResult.attempts.length > 0) {
+      const summary = solverResult.attempts
         .map(
           (ocrAttempt) =>
             `${ocrAttempt.sourceLabel}/${ocrAttempt.passLabel}="${ocrAttempt.candidate}"(${
@@ -1634,17 +1629,17 @@ async function resolveAvailabilityAfterCaptcha(config) {
         )
         .join(", ");
 
-      logStep(`OCR attempts: ${summary}`);
+      logStep(`captcha attempts: ${summary}`);
     }
 
     if (isLikelyCaptchaText(captchaText)) {
       logStep(
-        `OCR guessed captcha "${captchaText}"${captchaImagePath ? ` using ${captchaImagePath}` : ""}`
+        `model guessed captcha "${captchaText}"${captchaImagePath ? ` using ${captchaImagePath}` : ""}`
       );
     }
 
     if (!isLikelyCaptchaText(captchaText)) {
-      logStep("OCR did not produce a 4-character captcha candidate, refreshing captcha");
+      logStep("model did not produce a 4-character captcha candidate, refreshing captcha");
       const refreshResult = await refreshCaptchaWithFallback(
         config,
         getCaptchaSnapshotSignature(currentSnapshot)
@@ -1655,7 +1650,7 @@ async function resolveAvailabilityAfterCaptcha(config) {
 
     if (shouldAutoSubmitOcrCaptcha(captchaText)) {
       logStep(
-        `auto-submitting OCR captcha "${captchaText}"${captchaImagePath ? ` from ${captchaImagePath}` : ""}`
+        `auto-submitting model captcha "${captchaText}"${captchaImagePath ? ` from ${captchaImagePath}` : ""}`
       );
     }
 
@@ -1702,6 +1697,9 @@ async function runChromeCheck(config) {
   await assertChromeJavaScriptBridgeReady(config.baseUrl);
 
   let status = await resolveAvailabilityAfterCaptcha(config);
+  let postCaptchaArtifactPath = "";
+  let postSelectionArtifactPath = "";
+  let selectionResults = null;
 
   if (shouldReopenRegistrationAfterCaptcha(status)) {
     logStep("captcha passed and page returned to registration home, reopening Schengen registration");
@@ -1709,13 +1707,31 @@ async function runChromeCheck(config) {
     status = normalizeChromeStatus(await runPageAction(buildSnapshotAction()));
   }
 
+  if (!status.isCaptchaStep && !status.blockedByChallenge) {
+    postCaptchaArtifactPath = writeChromeStatusArtifact(
+      config.artifactsDir,
+      "post-captcha-before-selection",
+      status
+    );
+    logStep(`saved post-captcha snapshot to ${postCaptchaArtifactPath}`);
+  }
+
   if (
     !status.isAvailable &&
     !status.blockedByChallenge &&
     !status.isCaptchaStep
   ) {
-    await fillPostCaptchaSelections(config);
+    selectionResults = await fillPostCaptchaSelections(config);
     status = normalizeChromeStatus(await runPageAction(buildSnapshotAction()));
+    postSelectionArtifactPath = writeChromeStatusArtifact(
+      config.artifactsDir,
+      "post-captcha-after-selection",
+      status,
+      {
+        selectionResults,
+      }
+    );
+    logStep(`saved post-selection snapshot to ${postSelectionArtifactPath}`);
     logStep(
       `post-selection snapshot reason=${status.reason} selects=${status.selectCount} inputs=${status.inputCount}`
     );
@@ -1734,6 +1750,10 @@ async function runChromeCheck(config) {
       optionTexts: status.optionTexts,
       pageUrl: status.pageUrl,
       unavailabilityText: status.unavailabilityText,
+    },
+    artifacts: {
+      postCaptchaArtifactPath,
+      postSelectionArtifactPath,
     },
   };
 
@@ -2196,6 +2216,7 @@ module.exports = {
   selectBestCaptchaSolverResult,
   isConfidentLocalModelAttempt,
   waitForCaptchaSignatureChange,
+  writeChromeStatusArtifact,
   writeCaptchaCollectionSummary,
   writeRefreshDiagnosticRecord,
   writeRefreshDiagnosticSummary,

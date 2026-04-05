@@ -8,7 +8,7 @@ Single-run macOS CLI for checking whether the Poland Schengen visa page for Los 
 - Navigates directly to:
   `https://secure.e-konsulat.gov.pl/placowki/126/wiza-schengen/wizyty/weryfikacja-obrazkowa`
 - Reads the captcha with local OCR
-- Tries the local captcha prototype model first in `check`, then falls back to Tesseract OCR if the model score is not confident enough
+- Uses the local captcha prototype model directly in `check`
 - Re-runs OCR until it gets a 4-character candidate, including symbols such as `@`, `+`, `=`, and `#`
 - If the first OCR path is still weak, switches to an alternate processed captcha capture and runs OCR again
 - Only submits OCR when it has a 4-character captcha candidate; otherwise it refreshes the captcha and retries automatically
@@ -19,6 +19,8 @@ Single-run macOS CLI for checking whether the Poland Schengen visa page for Los 
   - `Lokalizacja = Los Angeles`
   - `Chcę zarezerwować termin dla = 1 osob`
 - Detects whether `Termin` has real options or whether the page shows the Polish “all reserved” message
+- Saves post-captcha status artifacts so we can inspect exactly which dropdowns were found and what options were visible
+- After each captcha submit, treats visible post-captcha dropdowns as stronger evidence than the old captcha URL, so the terminal stops waiting once the next page is reached
 
 ## What This Version Does Not Do
 
@@ -128,6 +130,8 @@ npm test
 8. If OCR still does not have 4 characters, refreshes the captcha and retries automatically
 9. If the captcha is rejected, saves the refreshed captcha image and retries automatically
 10. Selects the three post-captcha dropdowns
+11. Saves a `post-captcha-before-selection` status artifact when captcha has been cleared
+12. Saves a `post-captcha-after-selection` status artifact after trying the three dropdowns
 11. Prints compact JSON like:
 
 ```json
@@ -152,12 +156,24 @@ npm test
 
 ## Notes
 
-- OCR is now OCR-first and fully automated in `check`. The terminal no longer blocks waiting for manual captcha correction.
-- `check` now loads `artifacts/captcha-model-current/model.json` by default and prefers a low-distance local-model guess before falling back to Tesseract.
+- `check` is now fully automated around the local captcha model. The terminal no longer blocks waiting for manual captcha correction.
+- `check` now loads `artifacts/captcha-model-current/model.json` by default and submits the best local-model guess on each attempt.
 - OCR cleaning now restricts output to the known 4-character captcha alphabet, including `@`, `+`, `=`, and `#`.
 - The page runtime now exposes both raw and processed captcha captures so OCR has a fallback image source before the next retry.
+- Post-captcha snapshots now include field diagnostics for `Rodzaj usługi`, `Lokalizacja`, `Chcę zarezerwować termin dla`, and `Termin`, including control type, current text, and visible option texts.
 - Positive hits still use desktop notification support when enabled.
 - Debug mode is intentionally verbose; normal `check` output is intentionally compact.
+
+## Post-Captcha Artifacts
+
+- When `check` gets past captcha, it now writes JSON artifacts like:
+  - `artifacts/chrome-status-...-post-captcha-before-selection.json`
+  - `artifacts/chrome-status-...-post-captcha-after-selection.json`
+- These files include:
+  - the normalized page snapshot
+  - field diagnostics for the four key dropdowns
+  - selection action results for service / location / people count
+  - page text samples and final availability signals
 
 ## Captcha Collection
 
@@ -230,7 +246,8 @@ npm test
 - Checker integration currently uses a conservative local-model gate:
   - environment flag: `USE_LOCAL_CAPTCHA_MODEL=true`
   - default model path: `artifacts/captcha-model-current/model.json`
-  - default max average distance: `35`
+  - default max average distance: `50`
+  - default captcha retries in `check`: `5`
 
 ## Refresh Diagnostics
 

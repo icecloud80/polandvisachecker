@@ -438,6 +438,14 @@ test("normalizeChromeStatus applies conservative defaults", () => {
       { label: "raw", dataUrl: "data:image/png;base64,AAAA" },
       { label: "", dataUrl: "" },
     ],
+    selectionDiagnostics: {
+      service: {
+        found: true,
+        controlType: "custom_select",
+        currentText: "wiza schengen",
+        optionTexts: ["wiza schengen"],
+      },
+    },
   });
 
   assert.equal(result.isAvailable, true);
@@ -447,4 +455,8 @@ test("normalizeChromeStatus applies conservative defaults", () => {
     { label: "raw", dataUrl: "data:image/png;base64,AAAA" },
   ]);
   assert.equal(result.reason, "unknown");
+  assert.equal(result.selectionDiagnostics.service.found, true);
+  assert.equal(result.selectionDiagnostics.service.controlType, "custom_select");
+  assert.deepEqual(result.selectionDiagnostics.service.optionTexts, ["wiza schengen"]);
+  assert.equal(result.selectionDiagnostics.location.found, false);
 });

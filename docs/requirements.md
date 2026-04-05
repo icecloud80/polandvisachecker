@@ -24,7 +24,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Extract both the raw captcha image and at least one alternate processed captcha capture from the page.
 - Save the captcha image into `artifacts/`.
 - Run local OCR for the captcha.
-- Run the first local captcha model in `check` before Tesseract OCR, and only trust it when its average-distance score passes the configured gate.
+- Run the first local captcha model directly in `check`, and submit its best current guess without invoking Tesseract.
 - Constrain OCR cleanup to the known captcha alphabet: letters, digits, `@`, `#`, `+`, and `=`.
 - Prefer OCR candidates that resolve to exactly 4 characters.
 - Re-run OCR on the same captcha before switching to the alternate processed capture.
@@ -35,6 +35,8 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Select `Lokalizacja = Los Angeles`.
 - Select `Chcę zarezerwować termin dla = 1 osob`.
 - Read the `Termin` field after the selections settle.
+- Persist a post-captcha status artifact before the dropdown selections run.
+- Persist a post-captcha status artifact after the dropdown selections run, including per-field diagnostics and selection action results.
 - Mark the result as available when `Termin` contains at least one real selectable date.
 - Mark the result as unavailable when the page shows:
   `Chwilowo wszystkie udostępnione terminy zostały zarezerwowane, prosimy spróbować umówić wizytę w terminie późniejszym`
@@ -68,7 +70,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - This version must use real Google Chrome, not Playwright-first automation.
 - This version must be single-run only; polling and every-2-hours scheduling are out of scope.
 - OCR is assistive only and must auto-submit valid 4-character results without blocking on manual help.
-- The first local captcha model may assist live `check`, but it must be gated by a conservative score threshold before it outranks Tesseract.
+- The first local captcha model is now the only captcha solver in live `check`.
 - OCR cleaning must preserve visible captcha symbols such as `@`, `+`, and `=` instead of stripping them.
 - OCR should aggressively target a 4-character result, because the live captcha length is fixed at 4.
 - Captcha dataset collection must not submit forms or leave the captcha page intentionally.
@@ -76,6 +78,8 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Captcha suggestion generation must preserve symbol characters such as `@`, `#`, `+`, and `=` in OCR outputs.
 - The tool must prioritize the fixed Los Angeles Schengen path only.
 - The tool must support both native `select` controls and custom combobox/listbox widgets.
+- Post-captcha diagnostics must preserve per-field evidence for service, location, people count, and date.
+- Post-captcha selection controls and date evidence must outrank captcha-path evidence, because the live site can keep the old captcha URL even after the next page is visible.
 - Date-option evidence is stronger than message-text evidence.
 - When no strong evidence exists, the tool must return a conservative non-available result.
 - The tool must preserve explicit page-stage reasons such as `captcha_step`, `selection_step`, and `imperva_challenge`.
@@ -85,10 +89,8 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 
 - Start on the fixed Schengen captcha URL.
 - If the page is still at captcha, run OCR against the raw captcha capture first.
-- If the local captcha model has a confident prediction for the current captcha image, prefer that guess before running Tesseract.
-- If raw OCR does not yield a solid 4-character candidate, re-run OCR and then switch to the alternate processed capture.
-- Submit the current OCR guess immediately without waiting for terminal input, but only when it is a 4-character candidate.
-- If the captcha is rejected, capture the refreshed image and retry automatically.
+- If the local captcha model has multiple variant predictions for the current captcha image, submit the lowest-distance candidate immediately without waiting for terminal input.
+- If the captcha is rejected, capture the refreshed image and retry automatically for up to 5 attempts.
 - If captcha success returns to the registration home, reopen the fixed Schengen URL.
 - If the command is `collect-captcha`, stay on the captcha page, save the current captcha image set, refresh, and repeat until the requested sample count is reached.
 - During `collect-captcha`, if refresh does not change the captcha image yet, keep waiting or retry refreshing instead of saving a duplicate sample.
@@ -113,6 +115,8 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
   - if `Termin` has real options, return available
   - else if the exact Polish reserved message is present, return unavailable
   - else return the current page-stage reason or `unknown_or_waiting`
+- After captcha success but before final inference, write JSON evidence so later debugging can tell whether the page was reached but the selectors failed.
+- After each captcha submit, immediately re-evaluate whether the next page is already visible before continuing any captcha retry logic.
 
 ## 6. AI Strategy
 
@@ -127,7 +131,8 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Treat OCR suggestions as accelerators for manual labeling, not as confirmed labels.
 - Treat the post-label export as the start of model work, because a stable train/val/test directory is more important than training code coupled to the labeler format.
 - Treat the first local trainer as a baseline model, because it gives immediate feedback on whether the labeled dataset is learnable before investing in heavier ML tooling.
-- Treat checker-side model integration as conservative at first, because live captcha failure is more expensive than an offline evaluation miss.
+- Treat checker-side model integration as retry-driven, because live `check` now relies entirely on the local model instead of OCR fallback.
+- Treat post-captcha evidence as first-class debug output, because once captcha is solved the main uncertainty moves to dropdown detection and `Termin` inference.
 - Treat refresh diagnostics as the prerequisite evidence layer before changing OCR or model strategy again.
 - Treat refresh-candidate enumeration as the first Phase A debugging surface, because a visible `Odśwież` label does not guarantee the current selector points at the real interactive node.
 - When refresh-candidate enumeration returns nothing, treat the actionable-control dump as the next debugging surface before changing click strategy again.
@@ -154,6 +159,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Add a “skip to next unlabeled with no OCR suggestion” mode if OCR coverage becomes uneven.
 - Compare the first prototype model against improved preprocessing variants.
 - Recalibrate the checker-side local-model distance threshold using real live runs and the saved captcha artifacts.
+- Improve the local model until the 5-attempt live checker clears captcha consistently without any OCR fallback.
 - Add top-k prediction output so the labeler can optionally use model suggestions in future rechecks.
 - Add a dataset browser that reads both `labels.json` and `summary.json`, so labeling can prioritize the cleanest runs first.
 - Turn the refresh diagnostic JSON into a small analysis report that clusters failures by method, target element, and tab-loss behavior.
@@ -176,6 +182,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Save refresh diagnostics into per-run directories so the operator can compare JSON evidence with before/after captcha images.
 - Keep refresh candidate metadata readable in JSON so the operator can compare “visible label node” and “real clickable ancestor” without inspecting the DOM live.
 - Keep local training output machine-readable so later model iterations can diff metrics and per-split failures.
+- Keep post-captcha status artifacts machine-readable so live selector failures can be compared across runs.
 
 ## 10. Bug Fix List
 
@@ -207,4 +214,5 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - 2026-04-05: added `captcha:suggest` plus `ocrText` prefill so unlabeled captcha entries now open with an OCR default value that the user can confirm or correct.
 - 2026-04-05: added `captcha:prepare-train` so the fully labeled captcha set can now be exported into a deterministic train/val/test directory with OCR baseline metrics.
 - 2026-04-05: added `captcha:train-local`, a pure-Node first local trainer that decodes PNG captcha images, builds per-character prototypes, and emits train/val/test evaluation reports without extra ML dependencies.
-- 2026-04-05: integrated the first local captcha model into `check` as a conservative pre-Tesseract solver, gated by average-distance threshold and still backed by OCR fallback.
+- 2026-04-05: switched live `check` to local-model-only captcha solving, raised the default distance gate to 50, and increased automated captcha retries to 5 attempts.
+- 2026-04-05: added post-captcha status artifacts and per-field dropdown diagnostics so runs that clear captcha now preserve exact evidence about selection-step detection and `Termin` options.

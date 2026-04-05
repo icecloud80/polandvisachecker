@@ -26,12 +26,7 @@
    - capture an alternate processed captcha image in the page runtime
    - save image to `artifacts/`
    - run the local prototype model against the available captcha variants first
-   - if a local-model guess has low enough average distance, submit it directly
-   - OCR the image in Node with Tesseract
-   - first retry OCR against the raw capture until a 4-character candidate is found or exhausted
-   - if needed, switch to the processed capture and OCR again
-   - only if OCR resolves to 4 allowed characters, auto-submit the guess without waiting for terminal input
-   - otherwise click captcha refresh and move on to the next automated attempt
+   - submit the lowest-distance local-model guess directly
    - if the captcha is rejected, capture the refreshed image and retry automatically
    - fill the captcha input and click `Dalej`
 6. If captcha success returns to the registration home, reopen the fixed Schengen URL.
@@ -39,9 +34,11 @@
    - `Rodzaj usługi = Wiza Schengen`
    - `Lokalizacja = Los Angeles`
    - `Chcę zarezerwować termin dla = 1 osob`
-8. The runtime reads the `Termin` control and the reserved-message area.
-9. `src/status.js` converts those signals into the final status object.
-10. The CLI prints compact JSON and sends a desktop notification only if dates are available.
+8. The CLI writes a `post-captcha-before-selection` artifact once captcha is cleared.
+9. The runtime reads the `Termin` control and the reserved-message area.
+10. The CLI writes a `post-captcha-after-selection` artifact with field diagnostics and selection action results.
+11. `src/status.js` converts those signals into the final status object.
+12. The CLI prints compact JSON and sends a desktop notification only if dates are available.
 11. If the command is `collect-captcha`, the CLI saves captcha samples and a blank labeling manifest instead of submitting the form.
 12. If the command is `diagnose-refresh`, the CLI runs refresh-only attempts, records before/after evidence, and writes a structured summary for Phase A analysis.
 13. If the command is `captcha:label`, the local labeler selects the latest dataset, opens a tiny browser UI, and saves each `expectedText` update back into `labels.json`.
@@ -117,8 +114,14 @@
 - Rule: the first model iteration should run locally without extra ML setup.
   Design: `src/captcha-train-local.js` uses only Node built-ins plus the exported PNG dataset, then trains a lightweight nearest-prototype classifier instead of depending on Python, NumPy, or Torch.
 
-- Rule: live checker integration should use the local model conservatively.
-  Design: `src/chrome-cli.js` loads `artifacts/captcha-model-current/model.json`, scores each captcha variant with the prototype model, and only lets the model outrank Tesseract when the average-distance score passes a configurable threshold.
+- Rule: live checker should now use the local model only.
+  Design: `src/chrome-cli.js` loads `artifacts/captcha-model-current/model.json`, scores each captcha variant with the prototype model, and submits the best local-model candidate on every attempt without invoking Tesseract.
+
+- Rule: once captcha is solved, selector debugging should not rely on terminal logs alone.
+  Design: `src/chrome-cli.js` now writes post-captcha JSON artifacts before and after the dropdown selection step, while `src/chrome-page.js` includes per-field diagnostics for service, location, people count, and date.
+
+- Rule: post-captcha field evidence must outrank stale captcha-path evidence.
+  Design: `src/chrome-page.js` now evaluates visible `Termin` options, reserved-message text, and selection controls before falling back to `captcha_step`, so a reused `weryfikacja-obrazkowa` URL no longer traps the CLI on the wrong state.
 
 ## 4. Captcha Design
 
@@ -145,7 +148,9 @@
 - Local-training behavior:
   rebuild the exported training directory, decode 8-bit PNG captcha images locally, convert them to grayscale, compute an Otsu threshold, remove isolated noise, split the text region into 4 glyph windows, vectorize each glyph into a fixed occupancy grid, average train-split glyph vectors per character label into prototypes, then evaluate on train / val / test
 - Checker-side model behavior:
-  score raw and processed captcha variants with the local prototype model, record the per-variant average distance in the attempt log, and use the model guess only when that distance is low enough; otherwise continue into the existing Tesseract flow
+  score raw and processed captcha variants with the local prototype model, record the per-variant average distance in the attempt log, and submit the lowest-distance local-model guess on each attempt; if the page still rejects it, continue to the next refreshed captcha until the retry limit is reached
+- Post-captcha diagnostic behavior:
+  enrich each page snapshot with `selectionDiagnostics`, including whether each field was found, what control type was matched, the current visible text, and the currently visible option list; write that snapshot to JSON before and after the selection step
 - Diagnostic behavior:
   stay on the captcha page, execute refresh attempts, store the pre/post captcha signatures and images, and persist the chosen refresh target, the broader refresh candidate list, and the raw visible-actionable-control dump for each attempt
 
@@ -194,6 +199,7 @@
   - OCR suggestion selection and manifest update behavior
   - training split assignment, validation, and OCR baseline summary
   - PNG decode helpers, thresholding helpers, glyph-boundary selection, and prototype-model classification
+  - post-captcha artifact writing and selection-diagnostic normalization
   - snapshot normalization
 
 ## 8. Known Risks
@@ -214,4 +220,5 @@
 - OCR suggestions currently operate on the raw local image only; if suggestion quality remains poor, the next upgrade should add local preprocessed variants before OCR.
 - The first local prototype trainer is intentionally simple; it still loses information when 4-character segmentation drifts or when adjacent symbols touch.
 - The current local trainer uses only one preprocessing path; later iterations should compare multiple preprocessing variants and possibly store top-k predictions instead of only the best guess.
-- The checker-side gate currently uses one coarse average-distance threshold, so live integration may still reject model guesses that would actually pass; future work should calibrate this threshold against saved live captcha artifacts.
+- The checker-side gate currently uses one coarse average-distance threshold and no OCR fallback, so live performance now depends almost entirely on the local model quality and retry count.
+- Even after captcha succeeds, custom Material dropdown markup may still move or rename wrappers, so `selectionDiagnostics` should be treated as the source of truth before changing selector strategy again.

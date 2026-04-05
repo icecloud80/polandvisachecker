@@ -713,6 +713,64 @@ function getPageRuntimeSource() {
         return optionTexts;
       }
 
+      /**
+       * 作用：
+       * 读取某个业务字段当前命中的控件、当前值和候选项诊断信息。
+       *
+       * 为什么这样写：
+       * captcha 通过后最难排查的问题已经不再是“有没有页面”，
+       * 而是“脚本到底有没有找到对应字段、当前控件是什么、可选项里有什么”。
+       * 把这些字段诊断一起带回 Node 后，CLI 就能把 post-captcha 失败定位到具体下拉框。
+       *
+       * 输入：
+       * @param {RegExp|string} fieldPattern - 字段文本匹配模式。
+       * @param {boolean} includeOptions - 是否读取该字段的候选项文本。
+       *
+       * 输出：
+       * @returns {object} 单个字段的诊断对象。
+       *
+       * 注意：
+       * - 当前值仅用于诊断，不作为业务真值来源。
+       * - includeOptions 对日期字段尤其重要，因为 Termin 的候选项就是可用性证据。
+       */
+      function inspectChoiceField(fieldPattern, includeOptions) {
+        const nativeSelect = findBestSelect(fieldPattern, null);
+        const customTrigger = findBestCustomSelect(fieldPattern);
+        const activeControl =
+          nativeSelect instanceof HTMLSelectElement
+            ? nativeSelect
+            : customTrigger instanceof HTMLElement
+              ? customTrigger
+              : null;
+        const options = includeOptions ? getChoiceOptionTextsForField(fieldPattern) : [];
+        let currentText = "";
+        let controlType = "not_found";
+
+        if (nativeSelect instanceof HTMLSelectElement) {
+          controlType = "native_select";
+          const selectedOption =
+            nativeSelect.selectedOptions && nativeSelect.selectedOptions.length > 0
+              ? nativeSelect.selectedOptions[0]
+              : nativeSelect.options[nativeSelect.selectedIndex] || null;
+
+          currentText = normalizeText(
+            selectedOption ? selectedOption.textContent || "" : nativeSelect.value || ""
+          );
+        } else if (customTrigger instanceof HTMLElement) {
+          controlType = "custom_select";
+          currentText = normalizeText(customTrigger.textContent || customTrigger.getAttribute("aria-label") || "");
+        }
+
+        return {
+          found: Boolean(activeControl),
+          controlType,
+          currentText,
+          optionTexts: options,
+          contextText: activeControl ? getContextText(activeControl) : "",
+          element: activeControl ? describeElement(activeControl) : null
+        };
+      }
+
       function findInputByField(pattern) {
         const matcher = toRegExp(pattern);
         const candidates = Array.from(document.querySelectorAll("input[type='text'], input:not([type]), textarea")).filter(isVisible);
@@ -900,6 +958,8 @@ function getPageRuntimeSource() {
         const pageText = normalizeText(document.body ? document.body.innerText : "");
         const currentPath = String(window.location.pathname || "");
         const unavailableMessage = getUnavailableMessage(document.body ? document.body.innerText : "");
+        const selectionControlsPresent = hasSelectionControls();
+        const optionTexts = getChoiceOptionTextsForField(CONFIG.dateFieldPattern);
 
         if (hasIncapsulaIframe || /request unsuccessful|incapsula incident id|imperva/i.test(pageText)) {
           return {
@@ -910,26 +970,25 @@ function getPageRuntimeSource() {
           };
         }
 
-        if (/weryfikacja-obrazkowa/i.test(currentPath) || /characters from image|znaki z obrazka|weryfikacja obrazkowa/i.test(pageText)) {
-          return {
-            isAvailable: false,
-            reason: "captcha_step",
-            optionTexts: [],
-            unavailabilityText: ""
-          };
-        }
-
-        if (/\\/placowki\\/126\\/?$/i.test(currentPath) && /register the form|zarejestruj formularz/i.test(pageText)) {
-          return {
-            isAvailable: false,
-            reason: "registration_home",
-            optionTexts: [],
-            unavailabilityText: ""
-          };
-        }
-
-        const optionTexts = getChoiceOptionTextsForField(CONFIG.dateFieldPattern);
-
+        /**
+         * 作用：
+         * 优先把“已经进入下拉页”的证据识别成 selection/date 状态。
+         *
+         * 为什么这样写：
+         * 真实站点在 captcha 通过后，URL 仍可能保留 weryfikacja-obrazkowa。
+         * 如果先看路径或页面残余文案，就会把已经进入下一页的状态误判回 captcha_step，
+         * 导致 CLI 继续等待或重复提交验证码。
+         *
+         * 输入：
+         * 无
+         *
+         * 输出：
+         * @returns {void} 无返回值。
+         *
+         * 注意：
+         * - 日期选项和下拉控件证据优先级都高于 captcha 路径文本。
+         * - 这条顺序是 post-captcha 稳定性的关键，不要随便改回去。
+         */
         if (optionTexts.length > 0) {
           return {
             isAvailable: true,
@@ -948,10 +1007,28 @@ function getPageRuntimeSource() {
           };
         }
 
-        if (hasSelectionControls()) {
+        if (selectionControlsPresent) {
           return {
             isAvailable: false,
             reason: "selection_step",
+            optionTexts: [],
+            unavailabilityText: ""
+          };
+        }
+
+        if (/weryfikacja-obrazkowa/i.test(currentPath) || /characters from image|znaki z obrazka|weryfikacja obrazkowa/i.test(pageText)) {
+          return {
+            isAvailable: false,
+            reason: "captcha_step",
+            optionTexts: [],
+            unavailabilityText: ""
+          };
+        }
+
+        if (/\\/placowki\\/126\\/?$/i.test(currentPath) && /register the form|zarejestruj formularz/i.test(pageText)) {
+          return {
+            isAvailable: false,
+            reason: "registration_home",
             optionTexts: [],
             unavailabilityText: ""
           };
@@ -1002,6 +1079,7 @@ function getPageRuntimeSource() {
         describeElement,
         getActionableElements,
         getScreenClickPointForElement,
+        inspectChoiceField,
         normalizeText,
         collectPatternCandidates,
         collectVisibleActionableElements,
@@ -1178,6 +1256,12 @@ function buildSnapshotAction() {
   return `
     const availability = runtime.readAvailability();
     const captchaInput = runtime.findInputByField(runtime.CONFIG.imageVerificationPattern);
+    const selectionDiagnostics = {
+      service: runtime.inspectChoiceField(runtime.CONFIG.serviceFieldPattern, true),
+      location: runtime.inspectChoiceField(runtime.CONFIG.locationFieldPattern, true),
+      people: runtime.inspectChoiceField(runtime.CONFIG.peopleFieldPattern, true),
+      date: runtime.inspectChoiceField(runtime.CONFIG.dateFieldPattern, true)
+    };
     const pageText = String(document.body ? document.body.innerText : "");
     const visibleInputs = Array.from(document.querySelectorAll("input, textarea"))
       .filter((element) => {
@@ -1221,7 +1305,8 @@ function buildSnapshotAction() {
       inputCount: visibleInputs.length,
       inputHints: visibleInputs,
       buttonTexts: visibleButtons,
-      likelyCaptchaError: /bledne|błędne|niepoprawne|incorrect|invalid/i.test(pageText)
+      likelyCaptchaError: /bledne|błędne|niepoprawne|incorrect|invalid/i.test(pageText),
+      selectionDiagnostics
     };
   `;
 }
