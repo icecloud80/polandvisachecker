@@ -8,6 +8,7 @@
     "doctor": "node src/chrome-cli.js doctor",
     "check": "node src/chrome-cli.js check",
     "debug": "node src/chrome-cli.js debug",
+    "schedule:launchd": "node src/launchd.js",
     "captcha:collect": "node src/chrome-cli.js collect-captcha",
     "captcha:label": "node src/captcha-labeler.js",
     "captcha:suggest": "node src/captcha-suggest.js",

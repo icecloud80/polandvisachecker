@@ -9,6 +9,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - As a visa applicant, I want one command to drive the real Chrome flow so I do not need to click through the same steps manually.
 - As a visa applicant, I want OCR to keep pushing captcha attempts automatically so the CLI does not stop for manual intervention.
 - As a visa applicant, I want a clear machine-readable result that tells me whether dates exist, all dates are reserved, or the page is blocked.
+- As a visa applicant, I want the project to generate a ready-to-install macOS `launchd` bundle so I can run the checker every 2 hours without keeping a terminal open.
 
 ## 3. Functional Requirements
 
@@ -43,6 +44,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Print compact JSON with `checkedAt`, `isAvailable`, `reason`, `availableDateCount`, `optionTexts`, and `pageUrl`.
 - After the JSON block, print one final Chinese summary line: `有预约时间` or `没有预约时间`.
 - Support `doctor`, `check`, `debug`, and `collect-captcha` commands.
+- Support a `schedule:launchd` command that writes a 2-hour macOS `launchd` bundle into the workspace.
 - Support a `captcha:label` command that opens a local one-image-at-a-time labeling UI on top of `labels.json`.
 - Support a `captcha:suggest` command that batch-runs OCR for unlabeled captcha entries and writes machine suggestions back into the manifest.
 - Support a `captcha:prepare-train` command that validates the finished labels and exports a training-ready dataset directory.
@@ -65,11 +67,16 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - `diagnose-refresh` must write a batch `summary.json` file with changed-image counts and record paths.
 - `diagnose-refresh` must also persist the broader list of visible refresh-text candidates, their actionable ancestors, and click points so selector misses can be diagnosed from artifacts.
 - When refresh-text candidates are empty, `diagnose-refresh` must still persist the visible actionable controls and their search texts so regex and hidden-character issues can be diagnosed offline.
+- `schedule:launchd` must generate:
+  - one shell script that runs a single `check`
+  - one `.plist` file configured for every 2 hours
+  - one install guide with `launchctl` commands
+- `schedule:launchd` must keep generated files inside the workspace and must not silently write into `~/Library/LaunchAgents`.
 
 ## 4. Rules
 
 - This version must use real Google Chrome, not Playwright-first automation.
-- This version must be single-run only; polling and every-2-hours scheduling are out of scope.
+- This version must keep the checker itself single-run; the every-2-hours schedule is an outer `launchd` wrapper, not an internal watch loop.
 - OCR is assistive only and must auto-submit valid 4-character results without blocking on manual help.
 - The first local captcha model is now the only captcha solver in live `check`.
 - OCR cleaning must preserve visible captcha symbols such as `@`, `+`, and `=` instead of stripping them.
@@ -105,6 +112,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - If the command is `captcha:prepare-train`, validate the selected manifest, copy the images into a dedicated training directory, assign stable train/val/test splits, and emit an OCR baseline summary.
 - If the command is `captcha:train-local`, rebuild the current training directory, decode the copied PNG images locally, train a first character prototype model from the `train` split, and emit train/val/test evaluation summaries.
 - If the command is `diagnose-refresh`, stay on the captcha page, run refresh attempts repeatedly, and persist structured evidence about each attempt instead of collecting labels.
+- If the command is `schedule:launchd`, generate a shell script, a `.plist`, and an install guide under `artifacts/launchd/`.
 - Captcha refresh must activate the visible `Odśwież` button with a full mouse-event sequence instead of relying on a plain DOM `click()` only.
 - The page runtime must also try the matched element's nearest actionable ancestor when triggering `Odśwież` or `Dalej`, because the live site may wrap visible text inside nested Material-style button markup.
 - Refresh target discovery must not rely only on native button selectors; it must also inspect visible text matches and their nearest actionable ancestors.
@@ -151,6 +159,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Treat the fixed visual order of the four live dropdowns as a valid selector heuristic, because the current `mat-select` markup can expose no usable label text on the trigger or its immediate wrappers.
 - Treat normalized reserved-message matching as a required heuristic, because the live page can visually show the final state while raw DOM text still differs in whitespace or Unicode composition.
 - Treat `bodyTextSample/bodyTextTailSample` as the final no-slot fallback, because the live final page can visually show the result even when the explicit unavailable field was not captured in that exact snapshot.
+- Treat macOS `launchd` as the simplest recurring wrapper for this project, because the checker already depends on a local Chrome session and Apple Events permissions.
 - Treat refresh diagnostics as the prerequisite evidence layer before changing OCR or model strategy again.
 - Treat refresh-candidate enumeration as the first Phase A debugging surface, because a visible `Odśwież` label does not guarantee the current selector points at the real interactive node.
 - When refresh-candidate enumeration returns nothing, treat the actionable-control dump as the next debugging surface before changing click strategy again.
@@ -162,11 +171,12 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Auto-submit OCR output for every attempt, including weak guesses and symbol-bearing guesses.
 - Detect unavailable state using the exact Polish sentence, with English fallback kept only as compatibility.
 - For the first local trainer, prefer a deterministic character prototype model over heavier dependencies, because the immediate goal is to validate dataset learnability on the current machine.
+- For recurring runs on macOS, prefer generating a `launchd` bundle over embedding a sleep loop, because the project already needs GUI-friendly local scheduling.
 
 ## 8. Roadmap
 
-- Add polling after the single-run flow is stable.
-- Add every-2-hours scheduling after polling is accepted.
+- Add a one-command installer/uninstaller wrapper around the generated `launchd` bundle after the current manual-copy flow is proven stable.
+- Add polling after the single-run flow is stable enough that an outer scheduler is no longer sufficient.
 - Add structured notification templates for Telegram, Discord, Slack, and ntfy.
 - Improve captcha preprocessing before OCR.
 - Add OCR confidence scoring so the symbol-preserving 4-character rule is not the only submit heuristic.
@@ -201,6 +211,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Keep refresh candidate metadata readable in JSON so the operator can compare “visible label node” and “real clickable ancestor” without inspecting the DOM live.
 - Keep local training output machine-readable so later model iterations can diff metrics and per-split failures.
 - Keep post-captcha status artifacts machine-readable so live selector failures can be compared across runs.
+- Keep generated scheduling files machine-readable and self-contained so the operator can inspect them before installing them into `~/Library/LaunchAgents`.
 
 ## 10. Bug Fix List
 
@@ -240,3 +251,4 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - 2026-04-05: added a post-captcha selector fallback that maps the four visible `mat-select` controls by vertical order when live context-text matching returns `not_found` for every dropdown.
 - 2026-04-05: hardened final no-slot detection so the Polish reserved sentence is recognized even when the live page wraps it across lines or emits different Unicode spacing/diacritic forms.
 - 2026-04-05: added a business-layer no-slot fallback that scans normalized `bodyTextSample/bodyTextTailSample`, so final runs no longer stay at `selection_step` when the Polish reserved sentence is already visible in the captured page text.
+- 2026-04-05: added `schedule:launchd`, which generates a macOS shell script, `LaunchAgent` plist, and install guide so the single-run checker can be scheduled every 2 hours without adding an internal polling loop.

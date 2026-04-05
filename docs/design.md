@@ -3,6 +3,7 @@
 ## 1. Architecture
 
 - `src/chrome-cli.js`: the primary v1 entrypoint for `doctor`, `check`, `debug`, `collect-captcha`, and `diagnose-refresh`
+- `src/launchd.js`: bundle generator for a 2-hour macOS `launchd` wrapper around the single-run checker
 - `src/captcha-labeler.js`: lightweight local web server that turns `labels.json` into a one-image-at-a-time labeling UI
 - `src/captcha-suggest.js`: batch OCR suggester that fills `ocrText` for unlabeled captcha entries
 - `src/captcha-training.js`: training export tool that validates confirmed labels and writes a stable train/val/test dataset
@@ -45,11 +46,15 @@
 17. If the command is `captcha:suggest`, the OCR suggester scans unlabeled entries, writes `ocrText` and confidence metadata into the manifest, and leaves human confirmation to the labeler.
 18. If the command is `captcha:prepare-train`, the training exporter validates the manifest, copies images into a training directory, assigns deterministic splits, and writes summary plus JSONL files.
 19. If the command is `captcha:train-local`, the local trainer rebuilds the training directory, decodes PNG captchas, extracts 4 glyph vectors per image, trains a character prototype model from the train split, and writes summary plus per-split prediction reports.
+20. If the command is `schedule:launchd`, the generator writes a shell script, a `.plist`, and an `INSTALL.md` guide into `artifacts/launchd/` so macOS can call the single-run `check` every 2 hours.
 
 ## 3. Rule Mapping
 
 - Rule: the tool should only support the Los Angeles Schengen flow.
   Design: the bridge always navigates to the fixed `wiza-schengen/wizyty/weryfikacja-obrazkowa` path.
+
+- Rule: recurring execution should wrap the single-run checker instead of introducing a separate watch loop.
+  Design: `src/launchd.js` generates a macOS `launchd` bundle whose shell script runs exactly one `src/chrome-cli.js check` per trigger.
 
 - Rule: post-captcha selection should only fill the three variable dropdowns.
   Design: the CLI no longer selects country or office after captcha.
@@ -144,6 +149,9 @@
 - Rule: if page-level unavailable extraction still misses, the final result must still converge to the correct no-slot state.
   Design: `src/status.js` now re-checks `bodyTextSample` and `bodyTextTailSample` for the normalized Polish reserved sentence before falling back to `selection_step`.
 
+- Rule: the generated schedule files must stay reviewable before installation.
+  Design: `src/launchd.js` writes all generated artifacts into `artifacts/launchd/` first, including an `INSTALL.md` guide, and leaves the actual copy into `~/Library/LaunchAgents` as an explicit user step.
+
 ## 4. Captcha Design
 
 - Capture source:
@@ -174,6 +182,8 @@
   enrich each page snapshot with `selectionDiagnostics`, including whether each field was found, what control type was matched, the current visible text, and the currently visible option list; also persist `selectionLabelEvidence` so “labels rendered but controls not ready yet” can be distinguished from a true captcha page; write that snapshot to JSON before and after the selection step
 - Diagnostic behavior:
   stay on the captcha page, execute refresh attempts, store the pre/post captcha signatures and images, and persist the chosen refresh target, the broader refresh candidate list, and the raw visible-actionable-control dump for each attempt
+- Scheduling behavior:
+  keep `check` as a single-run entrypoint, generate a separate shell script that `cd`s into the project and runs one check, and point the generated plist at that script with `StartInterval=7200`
 
 ## 5. Availability Inference
 
@@ -194,6 +204,7 @@
 - If the page ignores a plain DOM click on `Odśwież`, the runtime should fall back to the stronger trigger path so captcha collection and retries keep moving.
 - If the runtime still cannot point at a usable refresh control, the diagnostic record should preserve all matched refresh candidates so selector misses can be analyzed offline.
 - If the runtime still cannot match any refresh candidate, the diagnostic record should preserve the visible actionable controls so Phase A can inspect search texts and hidden-character issues directly from artifacts.
+- If the user wants every-2-hours automation, the project should generate but not auto-install a `launchd` bundle, because writing directly into `~/Library/LaunchAgents` is a system-level choice better left explicit.
 
 ## 7. Testing Strategy
 
@@ -222,6 +233,7 @@
   - PNG decode helpers, thresholding helpers, glyph-boundary selection, and prototype-model classification
   - post-captcha artifact writing and selection-diagnostic normalization
   - snapshot normalization
+  - launchd label generation, shell/plist generation, and bundle writing
 
 ## 8. Known Risks
 
@@ -249,3 +261,4 @@
 - The live `mat-select` controls may expose empty text and empty parent/container text, so selector stability now depends on the fixed visual order fallback until a richer label-to-control association is discovered.
 - The final reserved-state sentence can visually match while raw DOM text still differs in whitespace or Unicode form, so unavailable-message extraction now normalizes text before giving up.
 - Even after that normalization, page-level extraction can still occasionally miss the final state, so business-layer inference now performs one last body-text fallback before preserving `selection_step`.
+- `launchd` runs inside a more minimal environment than an interactive terminal, so the generated shell script uses absolute paths and keeps the single-run checker as the only invoked business command.

@@ -10,6 +10,7 @@ Single-run macOS CLI for checking whether the Poland Schengen visa page for Los 
 - Uses the local captcha prototype model directly in `check`
 - Tries both raw and processed captcha captures and submits the best 4-character model candidate automatically
 - Preserves visible captcha symbols such as `@`, `+`, and `=` instead of stripping them out
+- Generates a ready-to-install macOS `launchd` bundle for running the checker every 2 hours
 - Clicks `Dalej`
 - Selects:
   - `Rodzaj usługi = Wiza Schengen`
@@ -26,7 +27,6 @@ Single-run macOS CLI for checking whether the Poland Schengen visa page for Los 
 ## What This Version Does Not Do
 
 - No polling
-- No every-2-hours scheduling
 - No Tampermonkey path
 - No Playwright-first flow
 - No support for other consulates or other visa flows
@@ -81,6 +81,12 @@ Generate OCR suggestions for unlabeled captcha entries:
 
 ```bash
 npm run captcha:suggest
+```
+
+Generate a macOS `launchd` bundle that runs `check` every 2 hours:
+
+```bash
+npm run schedule:launchd
 ```
 
 Export the fully labeled captcha set into a training-ready directory:
@@ -168,6 +174,24 @@ npm test
 - Final “all reserved” detection now also falls back to normalized `bodyTextSample/bodyTextTailSample`, so the Polish result is still recognized even when runtime-level `unavailabilityText` is temporarily empty.
 - Positive hits still use desktop notification support when enabled.
 - Debug mode is intentionally verbose; normal `check` output is intentionally compact.
+- `npm run schedule:launchd` writes a shell script, a `.plist`, and an `INSTALL.md` guide into `artifacts/launchd/`.
+- The generated `launchd` bundle does not install itself automatically; you still copy the `.plist` into `~/Library/LaunchAgents/` when you are ready.
+
+## macOS Scheduling
+
+Run:
+
+```bash
+npm run schedule:launchd
+```
+
+It generates:
+
+- `artifacts/launchd/run-check-every-2-hours.sh`
+- `artifacts/launchd/<label>.plist`
+- `artifacts/launchd/INSTALL.md`
+
+The shell script runs one `check` per launchd trigger, and the plist uses `StartInterval=7200` so macOS runs it every 2 hours.
 
 ## Post-Captcha Artifacts
 
