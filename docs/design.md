@@ -182,6 +182,8 @@
   load `artifacts/captcha-model-current/model.json`, predict each unlabeled local image with the same hybrid local model used by live `check`, write the best model output into `ocrText`, and keep the final confirmation in the browser UI
 - Training-export behavior:
   use the confirmed `expectedText` labels only, reject incomplete data, copy images into a dedicated export directory, and write `all.jsonl`, `train.jsonl`, `val.jsonl`, `test.jsonl`, and `summary.json`
+- Training-export resilience:
+  when rebuilding `artifacts/captcha-training-current/`, retry transient directory-removal failures such as `ENOTEMPTY`, `EBUSY`, or `EPERM` before surfacing a hard failure
 - Local-training behavior:
   rebuild the exported training directory, decode 8-bit PNG captcha images locally, convert them to grayscale, compute an Otsu threshold, remove isolated noise, compare projection / equal-width / component-guided segmentation branches, vectorize each glyph with occupancy, projection, transition, scalar, and serif-sensitive edge features, build global prototypes plus position-aware exemplar / multi-prototype indices, then evaluate on train / val / test
 - Checker-side model behavior:

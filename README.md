@@ -243,6 +243,7 @@ The shell script runs one `check` per launchd trigger, and the plist uses `Start
 - `npm run captcha:suggest` now loads the current local captcha model and writes a model-based machine suggestion into `ocrText` for entries whose `expectedText` is still empty, without marking the entry as confirmed.
 - `npm run captcha:prepare-train` validates the finished labels, copies the current captcha images into `artifacts/captcha-training-current/`, writes `train.jsonl` / `val.jsonl` / `test.jsonl`, and emits a training summary with machine-suggestion baseline stats.
 - `npm run captcha:train-local` rebuilds `artifacts/captcha-training-current/`, trains a pure-Node hybrid classifier, and writes the model plus prediction reports into `artifacts/captcha-model-current/`.
+- The training export now retries transient directory-removal failures such as macOS `ENOTEMPTY` before rebuilding `artifacts/captcha-training-current/`.
 - `npm run captcha:analyze` reads the current model artifacts and prints confusion pairs, serif hard-case confusion pairs, per-position accuracy, symbol error rate, and the estimated success rate within 5 fresh captcha attempts.
 - The UI shows one image at a time, lets you type the correct captcha text, and supports `Save` plus `Save & Next`.
 - When an entry has no confirmed `expectedText` yet, the labeler now pre-fills the input with `ocrText` so you only need to confirm or correct it.

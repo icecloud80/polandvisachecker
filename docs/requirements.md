@@ -255,6 +255,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - 2026-04-05: added a local `captcha:label` UI so captcha annotation now happens as a sequential image-input-next workflow instead of manual JSON editing.
 - 2026-04-05: changed `captcha:label` to prioritize the consolidated current label manifest, so the default labeling target now matches the cleaned image folder the user actually works from.
 - 2026-04-05: changed `captcha:suggest` to use the current local captcha model instead of Tesseract, while keeping the existing `ocrText` manifest fields for labeler compatibility.
+- 2026-04-05: hardened training export directory cleanup with retry logic for transient macOS `ENOTEMPTY` / `EBUSY` failures, so `captcha:train-local` can rebuild `captcha-training-current` reliably after fresh exports.
 - 2026-04-05: added `captcha:prepare-train` so the fully labeled captcha set can now be exported into a deterministic train/val/test directory with OCR baseline metrics.
 - 2026-04-05: added `captcha:train-local`, a pure-Node first local trainer that decodes PNG captcha images, builds per-character prototypes, and emits train/val/test evaluation reports without extra ML dependencies.
 - 2026-04-05: switched live `check` to local-model-only captcha solving, raised the default distance gate to 50, and increased automated captcha retries to 5 attempts.

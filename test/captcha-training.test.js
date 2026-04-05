@@ -5,8 +5,11 @@ const {
   assignTrainingSplit,
   buildTrainingRecord,
   countCharacterFrequency,
+  isRetryableDirectoryRemovalError,
   normalizeTrainingLabel,
   parseTrainingArgs,
+  removeDirectoryWithRetries,
+  sleepSync,
   summarizeOcrBaseline,
   validateTrainingEntries,
 } = require("../src/captcha-training");
@@ -92,6 +95,76 @@ test("validateTrainingEntries reports missing labels and missing images", () => 
   assert.ok(issues.some((issue) => issue.problem === "missing_label"));
   assert.ok(issues.some((issue) => issue.problem === "label_length_not_4"));
   assert.ok(issues.some((issue) => issue.problem === "missing_image"));
+});
+
+/**
+ * 作用：
+ * 验证训练目录删除重试器只会对白名单里的临时错误码返回 true。
+ *
+ * 为什么这样写：
+ * 这次真实训练是被 `ENOTEMPTY` 挡住的。
+ * 这条测试锁住可重试错误边界，避免以后把真正的逻辑错误也误判成“再试一次就好”。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入示例错误对象。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 当前只对白名单错误码开放重试。
+ * - 未知错误码必须保持 false。
+ */
+test("isRetryableDirectoryRemovalError only accepts transient directory removal errors", () => {
+  assert.equal(isRetryableDirectoryRemovalError({ code: "ENOTEMPTY" }), true);
+  assert.equal(isRetryableDirectoryRemovalError({ code: "EBUSY" }), true);
+  assert.equal(isRetryableDirectoryRemovalError({ code: "EPERM" }), true);
+  assert.equal(isRetryableDirectoryRemovalError({ code: "ENOENT" }), false);
+});
+
+/**
+ * 作用：
+ * 验证训练目录删除重试器会在临时错误后再次尝试。
+ *
+ * 为什么这样写：
+ * 真实 bug 并不是目录永久删不掉，而是第一次删除偶发失败。
+ * 这条测试锁住“第一次 ENOTEMPTY，第二次成功”的重试行为，避免修复只停留在文档层面。
+ *
+ * 输入：
+ * @param {object} 无 - 通过临时替换 `fs.rmSync` 来模拟文件系统错误。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 测试结束后必须恢复原始 `fs.rmSync`。
+ * - `retryDelayMs` 设为 0，避免单元测试白白等待。
+ */
+test("removeDirectoryWithRetries retries after a transient ENOTEMPTY failure", () => {
+  const fs = require("node:fs");
+  const originalRmSync = fs.rmSync;
+  let callCount = 0;
+
+  fs.rmSync = () => {
+    callCount += 1;
+
+    if (callCount === 1) {
+      const error = new Error("Directory not empty");
+      error.code = "ENOTEMPTY";
+      throw error;
+    }
+  };
+
+  try {
+    removeDirectoryWithRetries("/tmp/example-training-dir", {
+      retries: 2,
+      retryDelayMs: 0,
+    });
+  } finally {
+    fs.rmSync = originalRmSync;
+  }
+
+  assert.equal(callCount, 2);
 });
 
 /**

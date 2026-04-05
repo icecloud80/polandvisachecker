@@ -31,6 +31,96 @@ function normalizeTrainingLabel(value) {
 
 /**
  * 作用：
+ * 在同步代码路径里做一个很短的阻塞等待。
+ *
+ * 为什么这样写：
+ * 训练目录重建时，macOS 偶发会在刚删除目录后仍短暂占用目录句柄。
+ * 这里提供一个极短的同步等待，便于 `rmSync` 重试时给文件系统一点释放时间。
+ *
+ * 输入：
+ * @param {number} milliseconds - 需要等待的毫秒数。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 这里只用于本地 CLI 的极短重试，不适合长时间阻塞。
+ * - 毫秒数会被规范为非负整数。
+ */
+function sleepSync(milliseconds) {
+  const duration = Math.max(0, Math.round(Number(milliseconds || 0)));
+
+  if (duration <= 0) {
+    return;
+  }
+
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, duration);
+}
+
+/**
+ * 作用：
+ * 判断目录删除失败是否属于可重试的临时文件系统错误。
+ *
+ * 为什么这样写：
+ * 训练目录重建在 macOS 上真实遇到过 `ENOTEMPTY`。
+ * 把可重试判断独立出来后，重试逻辑和测试都更清晰，也便于以后补充 `EBUSY`、`EPERM` 一类问题。
+ *
+ * 输入：
+ * @param {Error} error - 目录删除失败时抛出的错误对象。
+ *
+ * 输出：
+ * @returns {boolean} 是否值得短暂等待后重试。
+ *
+ * 注意：
+ * - 当前只对已知的临时目录状态错误开放重试。
+ * - 未知错误会立即向上抛出，避免吞掉真正的问题。
+ */
+function isRetryableDirectoryRemovalError(error) {
+  const code = String((error && error.code) || "");
+
+  return code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM";
+}
+
+/**
+ * 作用：
+ * 稳健地清空训练输出目录，并在需要时做短暂重试。
+ *
+ * 为什么这样写：
+ * `captcha:prepare-train` 和 `captcha:train-local` 都会重建 `captcha-training-current`。
+ * 真实运行里目录删除偶发会碰到 `ENOTEMPTY`，这里集中处理后，训练流程就不会因为瞬时文件系统状态而失败。
+ *
+ * 输入：
+ * @param {string} directoryPath - 需要清空的目录路径。
+ * @param {object} options - 重试配置。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 当前默认重试 5 次、每次等待 30ms。
+ * - 最后一次仍失败时，会把原始错误直接抛出。
+ */
+function removeDirectoryWithRetries(directoryPath, options = {}) {
+  const retries = Math.max(1, Math.round(Number(options.retries || 5)));
+  const retryDelayMs = Math.max(0, Math.round(Number(options.retryDelayMs || 30)));
+  const resolvedDirectoryPath = path.resolve(directoryPath);
+
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    try {
+      fs.rmSync(resolvedDirectoryPath, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (!isRetryableDirectoryRemovalError(error) || attempt === retries - 1) {
+        throw error;
+      }
+
+      sleepSync(retryDelayMs);
+    }
+  }
+}
+
+/**
+ * 作用：
  * 检查当前标注清单是否满足训练数据的最低要求。
  *
  * 为什么这样写：
@@ -272,7 +362,7 @@ function prepareTrainingDataset(manifestPath, outputDir) {
   const resolvedOutputDir = path.resolve(outputDir);
   const imagesDir = path.join(resolvedOutputDir, "images");
 
-  fs.rmSync(resolvedOutputDir, { recursive: true, force: true });
+  removeDirectoryWithRetries(resolvedOutputDir);
   fs.mkdirSync(imagesDir, { recursive: true });
 
   const records = [];
@@ -401,9 +491,12 @@ module.exports = {
   assignTrainingSplit,
   buildTrainingRecord,
   countCharacterFrequency,
+  isRetryableDirectoryRemovalError,
   normalizeTrainingLabel,
   parseTrainingArgs,
   prepareTrainingDataset,
+  removeDirectoryWithRetries,
+  sleepSync,
   summarizeOcrBaseline,
   validateTrainingEntries,
   writeJsonLines,
