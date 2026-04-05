@@ -7,9 +7,10 @@ Single-run macOS CLI for checking whether the Poland Schengen visa page for Los 
 - Opens real Google Chrome on macOS
 - Navigates directly to:
   `https://secure.e-konsulat.gov.pl/placowki/126/wiza-schengen/wizyty/weryfikacja-obrazkowa`
-- Uses the local captcha prototype model directly in `check`
+- Uses the local captcha hybrid model directly in `check`
 - Tries both raw and processed captcha captures and submits the best 4-character model candidate automatically
 - Preserves visible captcha symbols such as `@`, `+`, and `=` instead of stripping them out
+- Scores captcha submissions with distance, segmentation quality, and overall confidence gates before submitting
 - Generates a ready-to-install macOS `launchd` bundle for running the checker every 2 hours
 - Clicks `Dalej`
 - Selects:
@@ -101,6 +102,12 @@ Train the first local prototype model on the labeled captcha set:
 npm run captcha:train-local
 ```
 
+Analyze the current model's confusion pairs, position accuracy, symbol errors, and 5-attempt estimate:
+
+```bash
+npm run captcha:analyze
+```
+
 Open a specific dataset or manifest:
 
 ```bash
@@ -132,12 +139,13 @@ npm test
 3. Extracts the captcha image from the page
 4. Saves the captcha image into `artifacts/`
 5. Runs the local captcha model against raw and processed captures
-6. Submits the best 4-character model candidate automatically and retries captcha when needed
-7. If captcha UI disappears after submit, treats that as a post-captcha transition instead of re-entering captcha logic
-8. Selects the three post-captcha dropdowns
-9. Detects either real `Termin` options or the final Polish “all reserved” state
-10. Saves `post-captcha-before-selection` and `post-captcha-after-selection` artifacts
-11. Prints compact JSON like:
+6. Evaluates the best candidate with distance, segmentation quality, and overall confidence gates
+7. Submits the best 4-character candidate only when it passes those quality gates; otherwise refreshes captcha and retries
+8. If captcha UI disappears after submit, treats that as a post-captcha transition instead of re-entering captcha logic
+9. Selects the three post-captcha dropdowns
+10. Detects either real `Termin` options or the final Polish “all reserved” state
+11. Saves `post-captcha-before-selection` and `post-captcha-after-selection` artifacts
+12. Prints compact JSON like:
 
 ```json
 {
@@ -150,7 +158,7 @@ npm test
 }
 ```
 
-12. Prints one final Chinese summary line:
+13. Prints one final Chinese summary line:
     `有预约时间` or `没有预约时间`
 
 ## Result Reasons
@@ -165,9 +173,18 @@ npm test
 ## Notes
 
 - `check` is now fully automated around the local captcha model. The terminal no longer blocks waiting for manual captcha correction.
-- `check` now loads `artifacts/captcha-model-current/model.json` by default and submits the best local-model guess on each attempt.
+- `check` now loads `artifacts/captcha-model-current/model.json` by default and evaluates the best local-model guess on each attempt.
 - The captcha alphabet remains restricted to known 4-character symbols, including `@`, `+`, `=`, and `#`.
 - The page runtime exposes both raw and processed captcha captures so the local model can score multiple variants before the next retry.
+- The current local trainer writes a hybrid classifier with:
+  - global fallback prototypes
+  - position-aware exemplar subsets
+  - position-aware multi-prototype clusters
+  - serif-sensitive feature metadata
+- The checker only submits a captcha candidate when all three gates pass:
+  - average distance
+  - segmentation quality
+  - overall model confidence
 - Post-captcha snapshots now include field diagnostics for `Rodzaj usługi`, `Lokalizacja`, `Chcę zarezerwować termin dla`, and `Termin`, including control type, current text, and visible option texts.
 - Post-captcha snapshots now also include `selectionLabelEvidence`, so the CLI can stop captcha retries as soon as the next-step labels are visible.
 - The post-captcha selector runtime now falls back to the visible vertical order of the four `mat-select` controls when the live page does not expose usable label text around each dropdown.
@@ -223,9 +240,10 @@ The shell script runs one `check` per launchd trigger, and the plist uses `Start
 
 - `npm run captcha:label` starts a local web UI for the latest available dataset and attempts to open it in your browser automatically.
 - `npm run captcha:label` now defaults to `artifacts/captcha-images-current-labels.json` when that consolidated current-label file exists.
-- `npm run captcha:suggest` runs batch OCR for entries whose `expectedText` is still empty and stores the machine suggestion in `ocrText` without marking the entry as confirmed.
-- `npm run captcha:prepare-train` validates the finished labels, copies the current captcha images into `artifacts/captcha-training-current/`, writes `train.jsonl` / `val.jsonl` / `test.jsonl`, and emits a training summary with OCR baseline stats.
-- `npm run captcha:train-local` rebuilds `artifacts/captcha-training-current/`, trains a pure-Node prototype classifier, and writes the model plus prediction reports into `artifacts/captcha-model-current/`.
+- `npm run captcha:suggest` now loads the current local captcha model and writes a model-based machine suggestion into `ocrText` for entries whose `expectedText` is still empty, without marking the entry as confirmed.
+- `npm run captcha:prepare-train` validates the finished labels, copies the current captcha images into `artifacts/captcha-training-current/`, writes `train.jsonl` / `val.jsonl` / `test.jsonl`, and emits a training summary with machine-suggestion baseline stats.
+- `npm run captcha:train-local` rebuilds `artifacts/captcha-training-current/`, trains a pure-Node hybrid classifier, and writes the model plus prediction reports into `artifacts/captcha-model-current/`.
+- `npm run captcha:analyze` reads the current model artifacts and prints confusion pairs, serif hard-case confusion pairs, per-position accuracy, symbol error rate, and the estimated success rate within 5 fresh captcha attempts.
 - The UI shows one image at a time, lets you type the correct captcha text, and supports `Save` plus `Save & Next`.
 - When an entry has no confirmed `expectedText` yet, the labeler now pre-fills the input with `ocrText` so you only need to confirm or correct it.
 - Press `Enter` inside the captcha text field to save the current label and jump to the next image.
@@ -252,33 +270,35 @@ The shell script runs one `check` per launchd trigger, and the plist uses `Start
 
 - `npm run captcha:train-local` uses the current consolidated labels by default and automatically refreshes `artifacts/captcha-training-current/` before training.
 - The model output directory is `artifacts/captcha-model-current/`.
-- The first local trainer is a pure-Node character prototype model:
+- The current local trainer is a pure-Node hybrid character model:
   - decode PNG captcha images locally
   - grayscale + Otsu threshold
   - light denoise
-  - split the text region into 4 glyph boxes
-  - vectorize each glyph into a fixed-size occupancy grid
-  - average train-split glyph vectors per character into prototypes
-  - evaluate train / val / test with nearest-prototype classification
+  - compare projection, equal-width, and component-guided segmentation branches
+  - vectorize each glyph with occupancy, projection, transition, density, center-of-mass, and serif-sensitive edge features
+  - build global fallback prototypes plus position-aware exemplar and multi-prototype indices
+  - evaluate train / val / test with hybrid scoring and top-k outputs
 - It writes:
   - `model.json`
   - `summary.json`
   - `train-predictions.json`
   - `val-predictions.json`
   - `test-predictions.json`
-- The current first-run metrics on the 206 labeled samples are:
-  - `train` exact match: `0.538`
-  - `val` exact match: `0.3333`
-  - `test` exact match: `0.3529`
-  - `train` character accuracy: `0.7544`
-  - `val` character accuracy: `0.6389`
-  - `test` character accuracy: `0.5735`
+- The current model artifacts also include:
+  - `positionMetrics`
+  - `confusionSummary`
+  - `serifConfusionSummary`
+  - `symbolErrorSummary`
+  - `fiveAttemptSuccessEstimate`
 - This already beats the earlier OCR baseline, whose exact-match rate on suggested samples was only `0.1282`.
 - Checker integration currently uses a conservative local-model gate:
   - environment flag: `USE_LOCAL_CAPTCHA_MODEL=true`
   - default model path: `artifacts/captcha-model-current/model.json`
   - default max average distance: `50`
+  - default min segmentation quality: `0.44`
+  - default min model confidence: `0.04`
   - default captcha retries in `check`: `5`
+- On the current 206-image dataset, the new hybrid model infrastructure is in place, but the latest holdout metrics still do not beat the earlier global-prototype baseline yet. The new analysis flow is there specifically to guide the next rounds of weighting, segmentation, and data expansion.
 
 ## Refresh Diagnostics
 
@@ -295,3 +315,4 @@ The shell script runs one `check` per launchd trigger, and the plist uses `Start
 
 - The real-click captcha refresh fallback may require macOS Accessibility permission for your terminal or Codex app:
   `System Settings > Privacy & Security > Accessibility`
+- If captcha collection cannot reuse the current page, the Chrome bridge now falls back to a minimal two-line AppleScript path: `tell application "Google Chrome" to activate` plus `tell application "Google Chrome" to Get URL ...`.

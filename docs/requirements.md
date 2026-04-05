@@ -24,8 +24,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Extract the captcha image from the page.
 - Extract both the raw captcha image and at least one alternate processed captcha capture from the page.
 - Save the captcha image into `artifacts/`.
-- Run local OCR for the captcha.
-- Run the first local captcha model directly in `check`, and submit its best current guess without invoking Tesseract.
+- Run the local captcha model directly in `check`, and submit its best current guess without invoking Tesseract.
 - Constrain OCR cleanup to the known captcha alphabet: letters, digits, `@`, `#`, `+`, and `=`.
 - Prefer OCR candidates that resolve to exactly 4 characters.
 - Re-run OCR on the same captcha before switching to the alternate processed capture.
@@ -46,9 +45,10 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Support `doctor`, `check`, `debug`, and `collect-captcha` commands.
 - Support a `schedule:launchd` command that writes a 2-hour macOS `launchd` bundle into the workspace.
 - Support a `captcha:label` command that opens a local one-image-at-a-time labeling UI on top of `labels.json`.
-- Support a `captcha:suggest` command that batch-runs OCR for unlabeled captcha entries and writes machine suggestions back into the manifest.
+- Support a `captcha:suggest` command that batch-runs the current local captcha model for unlabeled captcha entries and writes machine suggestions back into the manifest.
 - Support a `captcha:prepare-train` command that validates the finished labels and exports a training-ready dataset directory.
 - Support a `captcha:train-local` command that prepares the current labeled dataset, trains a first local classifier, and writes model plus prediction artifacts.
+- Support a `captcha:analyze` command that reads the latest model artifacts and prints position metrics, confusion summaries, serif hard-case summaries, symbol error rates, and the estimated success rate within 5 fresh captcha attempts.
 - Support a `diagnose-refresh` command dedicated to Phase A refresh investigation.
 - Keep desktop notification support for positive hits.
 - Positive-hit macOS notifications must use Chinese copy so the operator can react immediately without reading English system alerts.
@@ -58,11 +58,12 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - `collect-captcha` must write a batch `summary.json` file with saved-count, unique-signature, duplicate-skip, and refresh-method statistics.
 - `captcha:label` must default to `artifacts/captcha-images-current-labels.json` when that consolidated current-label file exists, and only then fall back to the newest available dataset or raw collection manifest.
 - `captcha:label` must display one captcha image at a time, allow updating `expectedText`, and support a save-and-next interaction without manually editing JSON.
-- `captcha:suggest` must only populate suggestion fields such as `ocrText`, `ocrConfidence`, and OCR attempt metadata; it must not overwrite confirmed `expectedText`.
+- `captcha:suggest` must only populate suggestion fields such as `ocrText`, `ocrConfidence`, and model-attempt metadata; it must not overwrite confirmed `expectedText`.
 - `captcha:prepare-train` must fail fast if any image is missing or any label is empty / non-4-character.
 - `captcha:prepare-train` must export copied images plus `all.jsonl`, `train.jsonl`, `val.jsonl`, `test.jsonl`, and `summary.json`.
 - `captcha:train-local` must rebuild `artifacts/captcha-training-current/`, train on the deterministic `train` split only, and emit `model.json`, `summary.json`, and per-split prediction reports.
 - `captcha:train-local` must stay local-only and must not require extra Python or ML package installation.
+- `captcha:train-local` must emit hybrid-model metadata, including position-aware exemplar / prototype data, serif-sensitive feature metadata, and a 5-attempt success estimate.
 - `collect-captcha` must confirm the captcha image has changed after refresh before counting the next sample.
 - `diagnose-refresh` must write a per-attempt JSON record plus before/after captcha images for each refresh attempt.
 - `diagnose-refresh` must write a batch `summary.json` file with changed-image counts and record paths.
@@ -81,6 +82,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - This version must keep the checker itself single-run; the every-2-hours schedule is an outer `launchd` wrapper, not an internal watch loop.
 - OCR is assistive only and must auto-submit valid 4-character results without blocking on manual help.
 - The first local captcha model is now the only captcha solver in live `check`.
+- The current local captcha model must preserve the earlier global-prototype path as the fallback scoring anchor even after adding position-aware exemplars and multi-prototype clusters.
 - OCR cleaning must preserve visible captcha symbols such as `@`, `+`, and `=` instead of stripping them.
 - OCR should aggressively target a 4-character result, because the live captcha length is fixed at 4.
 - Captcha dataset collection must not submit forms or leave the captcha page intentionally.
@@ -98,21 +100,24 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - When no strong evidence exists, the tool must return a conservative non-available result.
 - The tool must preserve explicit page-stage reasons such as `captcha_step`, `selection_step`, and `imperva_challenge`.
 - The first local captcha trainer must preserve symbol-bearing labels such as `@`, `#`, `+`, and `=` as first-class classes.
+- The local captcha trainer must treat the captcha alphabet as a serif-style character family and expose dedicated hard-case summaries for uppercase/lowercase/symbol confusions.
 
 ## 5. Logic
 
 - Start on the fixed Schengen captcha URL.
 - If the page is still at captcha, run OCR against the raw captcha capture first.
-- If the local captcha model has multiple variant predictions for the current captcha image, submit the lowest-distance candidate immediately without waiting for terminal input.
+- If the local captcha model has multiple variant predictions for the current captcha image, score them with distance, segmentation quality, and overall confidence before deciding whether to submit or refresh.
 - If the captcha is rejected, capture the refreshed image and retry automatically for up to 5 attempts.
+- If the best current model guess fails the segmentation-quality or confidence gate, refresh the captcha without submitting that guess.
 - If captcha success returns to the registration home, reopen the fixed Schengen URL.
 - If the command is `collect-captcha`, stay on the captcha page, save the current captcha image set, refresh, and repeat until the requested sample count is reached.
 - During `collect-captcha`, if refresh does not change the captcha image yet, keep waiting or retry refreshing instead of saving a duplicate sample.
 - During `collect-captcha`, each saved sample must inherit the provenance of the refresh step that produced it, so later labeling can distinguish initial-load images from DOM-refresh or real-click images.
 - If the command is `captcha:label`, start a local browser UI over the selected `labels.json`, show the current image, save the current label, and move to the next image on demand.
-- If the command is `captcha:suggest`, batch-run OCR only for entries whose `expectedText` is empty, persist the suggestion under `ocrText`, and leave final confirmation to the labeler UI.
+- If the command is `captcha:suggest`, batch-run the current local captcha model only for entries whose `expectedText` is empty, persist the suggestion under `ocrText`, and leave final confirmation to the labeler UI.
 - If the command is `captcha:prepare-train`, validate the selected manifest, copy the images into a dedicated training directory, assign stable train/val/test splits, and emit an OCR baseline summary.
-- If the command is `captcha:train-local`, rebuild the current training directory, decode the copied PNG images locally, train a first character prototype model from the `train` split, and emit train/val/test evaluation summaries.
+- If the command is `captcha:train-local`, rebuild the current training directory, decode the copied PNG images locally, train a hybrid character model from the `train` split, and emit train/val/test evaluation summaries plus hard-case analysis fields.
+- If the command is `captcha:analyze`, read the latest model artifacts and reprint holdout-oriented analysis fields instead of retraining the model.
 - If the command is `diagnose-refresh`, stay on the captcha page, run refresh attempts repeatedly, and persist structured evidence about each attempt instead of collecting labels.
 - If the command is `schedule:launchd`, generate a shell script, a `.plist`, and an install guide under `scheduler/`.
 - Captcha refresh must activate the visible `Odśwież` button with a full mouse-event sequence instead of relying on a plain DOM `click()` only.
@@ -152,7 +157,8 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Treat the one-image-at-a-time labeling UI as the default annotation path, because manual JSON editing is too slow for hundreds of captcha samples.
 - Treat OCR suggestions as accelerators for manual labeling, not as confirmed labels.
 - Treat the post-label export as the start of model work, because a stable train/val/test directory is more important than training code coupled to the labeler format.
-- Treat the first local trainer as a baseline model, because it gives immediate feedback on whether the labeled dataset is learnable before investing in heavier ML tooling.
+- Treat the first local trainer as a baseline-plus-analysis stack, because the immediate goal is now both “can the dataset be learned?” and “which serif-style hard cases are still blocking 5-attempt success?”
+- Treat global prototypes as the generalization anchor, and treat position-aware exemplars / multi-prototypes as supporting signals rather than the sole scoring source.
 - Treat checker-side model integration as retry-driven, because live `check` now relies entirely on the local model instead of OCR fallback.
 - Treat post-captcha evidence as first-class debug output, because once captcha is solved the main uncertainty moves to dropdown detection and `Termin` inference.
 - Treat next-step field labels as the earliest reliable post-captcha evidence, because the live Angular page can render labels before the dropdown widgets become detectable.
@@ -170,8 +176,10 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 ## 7. AI Heuristic
 
 - Treat OCR output length and symbols as observability signals, and require 4 allowed characters before submission.
+- Treat segmentation quality and overall model confidence as checker-side gates, because the model will often emit a 4-character string even for obviously bad splits.
 - Prefer exact 4-character OCR candidates over longer noisy strings.
 - Auto-submit OCR output for every attempt, including weak guesses and symbol-bearing guesses.
+- Refresh the captcha instead of submitting when the hybrid model says the current split is too unstable.
 - Detect unavailable state using the exact Polish sentence, with English fallback kept only as compatibility.
 - For the first local trainer, prefer a deterministic character prototype model over heavier dependencies, because the immediate goal is to validate dataset learnability on the current machine.
 - For recurring runs on macOS, prefer generating a `launchd` bundle over embedding a sleep loop, because the project already needs GUI-friendly local scheduling.
@@ -191,6 +199,9 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Compare the first prototype model against improved preprocessing variants.
 - Recalibrate the checker-side local-model distance threshold using real live runs and the saved captcha artifacts.
 - Improve the local model until the 5-attempt live checker clears captcha consistently without any OCR fallback.
+- Expand the labeled dataset from 206 images to 400-500 images, prioritizing serif hard cases such as `C/c`, `P/p`, `K/k`, `S/s`, `#`, `=`, `+`, `@`, and difficult first/last-character splits.
+- Rebalance hybrid-model weights until holdout performance at least matches, then beats, the earlier global-prototype baseline.
+- Use `captcha:analyze` after every training round so new data collection targets the worst current confusion pairs instead of growing the dataset blindly.
 - Add top-k prediction output so the labeler can optionally use model suggestions in future rechecks.
 - Add a dataset browser that reads both `labels.json` and `summary.json`, so labeling can prioritize the cleanest runs first.
 - Turn the refresh diagnostic JSON into a small analysis report that clusters failures by method, target element, and tab-loss behavior.
@@ -243,7 +254,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - 2026-04-05: added per-sample provenance metadata and per-run collection summaries so Phase A datasets can be filtered by unique signatures and refresh source before labeling.
 - 2026-04-05: added a local `captcha:label` UI so captcha annotation now happens as a sequential image-input-next workflow instead of manual JSON editing.
 - 2026-04-05: changed `captcha:label` to prioritize the consolidated current label manifest, so the default labeling target now matches the cleaned image folder the user actually works from.
-- 2026-04-05: added `captcha:suggest` plus `ocrText` prefill so unlabeled captcha entries now open with an OCR default value that the user can confirm or correct.
+- 2026-04-05: changed `captcha:suggest` to use the current local captcha model instead of Tesseract, while keeping the existing `ocrText` manifest fields for labeler compatibility.
 - 2026-04-05: added `captcha:prepare-train` so the fully labeled captcha set can now be exported into a deterministic train/val/test directory with OCR baseline metrics.
 - 2026-04-05: added `captcha:train-local`, a pure-Node first local trainer that decodes PNG captcha images, builds per-character prototypes, and emits train/val/test evaluation reports without extra ML dependencies.
 - 2026-04-05: switched live `check` to local-model-only captcha solving, raised the default distance gate to 50, and increased automated captcha retries to 5 attempts.
@@ -257,3 +268,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - 2026-04-05: added `schedule:launchd`, which generates a macOS shell script, `LaunchAgent` plist, and install guide so the single-run checker can be scheduled every 2 hours without adding an internal polling loop.
 - 2026-04-05: changed macOS desktop notification copy to Chinese, so positive hits now alert the operator with a direct “波兰签证有预约时间” message.
 - 2026-04-05: moved launchd bundle generation into the tracked `scheduler/` directory and removed legacy Playwright, Tampermonkey, camera-OCR, and stray debug-file remnants from the repository.
+- 2026-04-05: upgraded the local trainer from a single-prototype baseline to a hybrid classifier that now emits position metrics, confusion summaries, serif hard-case summaries, symbol error rates, and a 5-attempt success estimate.
+- 2026-04-05: added checker-side segmentation-quality and model-confidence gates so low-quality captcha splits are refreshed instead of being submitted blindly.
+- 2026-04-05: added `captcha:analyze` so every training round can now be reviewed through holdout confusion pairs, per-position accuracy, and 5-attempt budget estimates without retraining.
+- 2026-04-05: simplified the Chrome AppleScript tab-preparation fallback to `tell application "Google Chrome" to activate` plus a single-line `tell application "Google Chrome" to Get URL ...`, so captcha collection no longer depends on brittle window/tab traversal when the current page cannot be reused.

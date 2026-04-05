@@ -848,6 +848,762 @@ function vectorizeMaskRegion(mask, width, bounds, outputWidth, outputHeight) {
 
 /**
  * 作用：
+ * 构建指定区域内逐行的前景像素投影。
+ *
+ * 为什么这样写：
+ * 仅靠网格占据率还不够稳定地区分衬线体字符。
+ * 逐行投影可以补充“哪些高度更黑、更有笔画”的整体结构信息。
+ *
+ * 输入：
+ * @param {Uint8Array} mask - 二值掩码。
+ * @param {number} width - 图片宽度。
+ * @param {object} bounds - 统计区域边界。
+ *
+ * 输出：
+ * @returns {number[]} 逐行前景计数数组。
+ *
+ * 注意：
+ * - 返回数组长度等于字符区域高度。
+ * - 这里只统计边界框内部像素。
+ */
+function buildRowProjection(mask, width, bounds) {
+  const projection = [];
+
+  for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
+    let count = 0;
+
+    for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
+      count += mask[y * width + x];
+    }
+
+    projection.push(count);
+  }
+
+  return projection;
+}
+
+/**
+ * 作用：
+ * 把任意长度的数值序列重采样到固定长度。
+ *
+ * 为什么这样写：
+ * 投影、边缘轮廓和转折特征的原始长度都随字符框变化。
+ * 重采样后才能把这些结构特征稳定拼进同一条固定长度向量。
+ *
+ * 输入：
+ * @param {number[]} values - 原始数值序列。
+ * @param {number} targetLength - 目标长度。
+ * @param {number} normalizer - 归一化分母。
+ *
+ * 输出：
+ * @returns {number[]} 固定长度的归一化序列。
+ *
+ * 注意：
+ * - 输入为空时会返回全 0。
+ * - `normalizer` 小于等于 0 时会回退到 1，避免除零。
+ */
+function resampleNumericSequence(values, targetLength, normalizer = 1) {
+  const source = Array.isArray(values) ? values : [];
+  const safeNormalizer = normalizer > 0 ? normalizer : 1;
+
+  if (targetLength <= 0) {
+    return [];
+  }
+
+  if (source.length === 0) {
+    return new Array(targetLength).fill(0);
+  }
+
+  const result = [];
+
+  for (let index = 0; index < targetLength; index += 1) {
+    const start = Math.floor((index * source.length) / targetLength);
+    const end = Math.max(start + 1, Math.floor(((index + 1) * source.length) / targetLength));
+    let sum = 0;
+    let count = 0;
+
+    for (let sourceIndex = start; sourceIndex < Math.min(source.length, end); sourceIndex += 1) {
+      sum += source[sourceIndex];
+      count += 1;
+    }
+
+    result.push(Number(((count > 0 ? sum / count : 0) / safeNormalizer).toFixed(6)));
+  }
+
+  return result;
+}
+
+/**
+ * 作用：
+ * 统计单条 0/1 序列里的笔画转折次数。
+ *
+ * 为什么这样写：
+ * 衬线体字符的一个重要区别是横竖主干和端点转折模式。
+ * 用二值序列里的前景状态变化次数，可以补充字符骨架的复杂度信息。
+ *
+ * 输入：
+ * @param {number[]} values - 单条 0/1 序列。
+ *
+ * 输出：
+ * @returns {number} 转折次数。
+ *
+ * 注意：
+ * - 只统计相邻元素之间的 0/1 变化。
+ * - 输入为空时返回 0。
+ */
+function countBinaryTransitions(values) {
+  const source = Array.isArray(values) ? values : [];
+  let transitions = 0;
+
+  for (let index = 1; index < source.length; index += 1) {
+    if (source[index] !== source[index - 1]) {
+      transitions += 1;
+    }
+  }
+
+  return transitions;
+}
+
+/**
+ * 作用：
+ * 提取字符区域的逐行与逐列转折特征。
+ *
+ * 为什么这样写：
+ * 仅看黑像素总量不够区分 `# / H`、`= / t`、`C / c` 这类形近字符。
+ * 逐行逐列的转折数可以更直接反映主干、横杠和端点结构。
+ *
+ * 输入：
+ * @param {Uint8Array} mask - 二值掩码。
+ * @param {number} width - 图片宽度。
+ * @param {object} bounds - 字符边界框。
+ * @param {number} outputWidth - 行方向特征长度。
+ * @param {number} outputHeight - 列方向特征长度。
+ *
+ * 输出：
+ * @returns {object} 包含 rowTransitions 和 columnTransitions 的特征对象。
+ *
+ * 注意：
+ * - 特征值会按对应宽高归一化到 0-1 左右的量级。
+ * - 返回的两个数组长度分别对应 `outputHeight` 和 `outputWidth`。
+ */
+function buildTransitionFeatures(mask, width, bounds, outputWidth, outputHeight) {
+  const rowTransitions = [];
+  const columnTransitions = [];
+  const glyphWidth = Math.max(1, bounds.maxX - bounds.minX + 1);
+  const glyphHeight = Math.max(1, bounds.maxY - bounds.minY + 1);
+
+  for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
+    const row = [];
+
+    for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
+      row.push(mask[y * width + x]);
+    }
+
+    rowTransitions.push(countBinaryTransitions(row));
+  }
+
+  for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
+    const column = [];
+
+    for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
+      column.push(mask[y * width + x]);
+    }
+
+    columnTransitions.push(countBinaryTransitions(column));
+  }
+
+  return {
+    rowTransitions: resampleNumericSequence(rowTransitions, outputHeight, glyphWidth),
+    columnTransitions: resampleNumericSequence(columnTransitions, outputWidth, glyphHeight),
+  };
+}
+
+/**
+ * 作用：
+ * 计算字符区域的整体墨水密度。
+ *
+ * 为什么这样写：
+ * `=`、`+`、`#`、`H` 这类字符虽然局部结构接近，但整体黑像素占比差异仍然明显。
+ * 单独记录墨水密度可以减少分割误差对纯形状匹配的影响。
+ *
+ * 输入：
+ * @param {Uint8Array} mask - 二值掩码。
+ * @param {number} width - 图片宽度。
+ * @param {object} bounds - 字符边界框。
+ *
+ * 输出：
+ * @returns {number} 0-1 范围内的墨水密度。
+ *
+ * 注意：
+ * - 区域为空时返回 0。
+ * - 当前把前景像素视作 1，背景像素视作 0。
+ */
+function computeForegroundDensity(mask, width, bounds) {
+  let foregroundCount = 0;
+  let totalCount = 0;
+
+  for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
+    for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
+      foregroundCount += mask[y * width + x];
+      totalCount += 1;
+    }
+  }
+
+  return totalCount > 0 ? Number((foregroundCount / totalCount).toFixed(6)) : 0;
+}
+
+/**
+ * 作用：
+ * 计算字符前景的重心位置。
+ *
+ * 为什么这样写：
+ * 大小写衬线体字符往往在重心位置上有稳定差异。
+ * 例如 `P / p`、`C / c`、`K / k` 的重心偏移，对分类有实际帮助。
+ *
+ * 输入：
+ * @param {Uint8Array} mask - 二值掩码。
+ * @param {number} width - 图片宽度。
+ * @param {object} bounds - 字符边界框。
+ *
+ * 输出：
+ * @returns {object} 归一化后的重心坐标。
+ *
+ * 注意：
+ * - 没有前景时回退到几何中心。
+ * - 输出范围大致在 0-1。
+ */
+function computeForegroundCenterOfMass(mask, width, bounds) {
+  let sumX = 0;
+  let sumY = 0;
+  let count = 0;
+  const glyphWidth = Math.max(1, bounds.maxX - bounds.minX + 1);
+  const glyphHeight = Math.max(1, bounds.maxY - bounds.minY + 1);
+
+  for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
+    for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
+      if (!mask[y * width + x]) {
+        continue;
+      }
+
+      sumX += x - bounds.minX;
+      sumY += y - bounds.minY;
+      count += 1;
+    }
+  }
+
+  if (count === 0) {
+    return {
+      x: 0.5,
+      y: 0.5,
+    };
+  }
+
+  return {
+    x: Number((sumX / count / glyphWidth).toFixed(6)),
+    y: Number((sumY / count / glyphHeight).toFixed(6)),
+  };
+}
+
+/**
+ * 作用：
+ * 统计字符在边缘方向上的首个前景距离轮廓。
+ *
+ * 为什么这样写：
+ * 衬线体最重要的先验之一就是端点突起与边缘形态。
+ * 记录顶部、底部、左右边缘的首个前景距离，可以让模型更直接感知 serif 轮廓。
+ *
+ * 输入：
+ * @param {Uint8Array} mask - 二值掩码。
+ * @param {number} width - 图片宽度。
+ * @param {object} bounds - 字符边界框。
+ * @param {string} direction - `top`、`bottom`、`left` 或 `right`。
+ * @param {number} sampleCount - 重采样后的输出长度。
+ *
+ * 输出：
+ * @returns {number[]} 归一化后的边缘轮廓序列。
+ *
+ * 注意：
+ * - 未找到前景时会把距离记为整段长度，表示该切片为空。
+ * - 输出值归一化到 0-1 左右，越小表示前景越靠近该边缘。
+ */
+function buildEdgeDistanceProfile(mask, width, bounds, direction, sampleCount) {
+  const values = [];
+  const glyphWidth = Math.max(1, bounds.maxX - bounds.minX + 1);
+  const glyphHeight = Math.max(1, bounds.maxY - bounds.minY + 1);
+
+  if (direction === "top" || direction === "bottom") {
+    for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
+      let distance = glyphHeight;
+
+      for (let offset = 0; offset < glyphHeight; offset += 1) {
+        const y = direction === "top" ? bounds.minY + offset : bounds.maxY - offset;
+
+        if (mask[y * width + x]) {
+          distance = offset;
+          break;
+        }
+      }
+
+      values.push(distance);
+    }
+
+    return resampleNumericSequence(values, sampleCount, glyphHeight);
+  }
+
+  for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
+    let distance = glyphWidth;
+
+    for (let offset = 0; offset < glyphWidth; offset += 1) {
+      const x = direction === "left" ? bounds.minX + offset : bounds.maxX - offset;
+
+      if (mask[y * width + x]) {
+        distance = offset;
+        break;
+      }
+    }
+
+    values.push(distance);
+  }
+
+  return resampleNumericSequence(values, sampleCount, glyphWidth);
+}
+
+/**
+ * 作用：
+ * 从单个字符框中抽取组合特征向量。
+ *
+ * 为什么这样写：
+ * 纯 occupancy grid 容易把衬线体 hard cases 混在一起。
+ * 这里把网格、投影、转折、密度、重心和边缘轮廓一起拼成一条特征向量，提高区分大小写和符号的能力。
+ *
+ * 输入：
+ * @param {Uint8Array} mask - 二值掩码。
+ * @param {number} width - 图片宽度。
+ * @param {object} bounds - 字符边界框。
+ * @param {number} outputWidth - 网格特征宽度。
+ * @param {number} outputHeight - 网格特征高度。
+ *
+ * 输出：
+ * @returns {object} 包含组合向量和辅助度量的特征对象。
+ *
+ * 注意：
+ * - 特征向量会对不同子模块施加不同权重。
+ * - 返回的 `metrics` 也会被后续分割质量与分析报告复用。
+ */
+function extractGlyphFeatureVector(mask, width, bounds, outputWidth, outputHeight) {
+  const glyphWidth = Math.max(1, bounds.maxX - bounds.minX + 1);
+  const glyphHeight = Math.max(1, bounds.maxY - bounds.minY + 1);
+  const occupancyVector = vectorizeMaskRegion(mask, width, bounds, outputWidth, outputHeight).map(
+    (value) => Number((value * 0.7).toFixed(6))
+  );
+  const rowProjection = resampleNumericSequence(
+    buildRowProjection(mask, width, bounds),
+    outputHeight,
+    glyphWidth
+  ).map((value) => Number((value * 1.05).toFixed(6)));
+  const columnProjection = resampleNumericSequence(
+    buildColumnProjection(mask, width, bounds),
+    outputWidth,
+    glyphHeight
+  ).map((value) => Number((value * 1.05).toFixed(6)));
+  const transitions = buildTransitionFeatures(mask, width, bounds, outputWidth, outputHeight);
+  const topEdgeProfile = buildEdgeDistanceProfile(mask, width, bounds, "top", outputWidth).map(
+    (value) => Number((value * 1.2).toFixed(6))
+  );
+  const bottomEdgeProfile = buildEdgeDistanceProfile(
+    mask,
+    width,
+    bounds,
+    "bottom",
+    outputWidth
+  ).map((value) => Number((value * 1.2).toFixed(6)));
+  const leftEdgeProfile = buildEdgeDistanceProfile(mask, width, bounds, "left", outputHeight).map(
+    (value) => Number((value * 1.15).toFixed(6))
+  );
+  const rightEdgeProfile = buildEdgeDistanceProfile(
+    mask,
+    width,
+    bounds,
+    "right",
+    outputHeight
+  ).map((value) => Number((value * 1.15).toFixed(6)));
+  const density = computeForegroundDensity(mask, width, bounds);
+  const center = computeForegroundCenterOfMass(mask, width, bounds);
+  const scalarFeatures = [
+    Number((density * 1.1).toFixed(6)),
+    Number((glyphWidth / glyphHeight).toFixed(6)),
+    Number(center.x.toFixed(6)),
+    Number(center.y.toFixed(6)),
+  ];
+
+  return {
+    vector: [
+      ...occupancyVector,
+      ...rowProjection,
+      ...columnProjection,
+      ...transitions.rowTransitions,
+      ...transitions.columnTransitions,
+      ...topEdgeProfile,
+      ...bottomEdgeProfile,
+      ...leftEdgeProfile,
+      ...rightEdgeProfile,
+      ...scalarFeatures,
+    ],
+    metrics: {
+      density,
+      aspectRatio: Number((glyphWidth / glyphHeight).toFixed(6)),
+      centerX: center.x,
+      centerY: center.y,
+      glyphWidth,
+      glyphHeight,
+    },
+  };
+}
+
+/**
+ * 作用：
+ * 在指定区域内搜索前景连通块。
+ *
+ * 为什么这样写：
+ * 单纯列投影在字符粘连或空隙偏移时容易漂。
+ * 连通块可以作为辅助定位，让我们在“4 个明显主块存在”时更稳地构造备用切分。
+ *
+ * 输入：
+ * @param {Uint8Array} mask - 二值掩码。
+ * @param {number} width - 图片宽度。
+ * @param {number} height - 图片高度。
+ * @param {object} bounds - 搜索区域边界。
+ *
+ * 输出：
+ * @returns {Array<object>} 连通块列表。
+ *
+ * 注意：
+ * - 当前按 8 邻域搜索。
+ * - 体积非常小的噪点仍会被返回，调用方需要自行过滤。
+ */
+function findConnectedComponents(mask, width, height, bounds) {
+  const visited = new Uint8Array(mask.length);
+  const components = [];
+  const queue = [];
+
+  for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
+    for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
+      const startIndex = y * width + x;
+
+      if (!mask[startIndex] || visited[startIndex]) {
+        continue;
+      }
+
+      visited[startIndex] = 1;
+      queue.push(startIndex);
+      let minX = x;
+      let maxX = x;
+      let minY = y;
+      let maxY = y;
+      let pixelCount = 0;
+
+      while (queue.length > 0) {
+        const current = queue.shift();
+        const currentY = Math.floor(current / width);
+        const currentX = current - currentY * width;
+
+        pixelCount += 1;
+        minX = Math.min(minX, currentX);
+        maxX = Math.max(maxX, currentX);
+        minY = Math.min(minY, currentY);
+        maxY = Math.max(maxY, currentY);
+
+        for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+          for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+            if (offsetX === 0 && offsetY === 0) {
+              continue;
+            }
+
+            const nextX = currentX + offsetX;
+            const nextY = currentY + offsetY;
+
+            if (
+              nextX < bounds.minX ||
+              nextX > bounds.maxX ||
+              nextY < bounds.minY ||
+              nextY > bounds.maxY
+            ) {
+              continue;
+            }
+
+            const nextIndex = nextY * width + nextX;
+
+            if (!mask[nextIndex] || visited[nextIndex]) {
+              continue;
+            }
+
+            visited[nextIndex] = 1;
+            queue.push(nextIndex);
+          }
+        }
+      }
+
+      components.push({
+        minX,
+        maxX,
+        minY,
+        maxY,
+        pixelCount,
+        width: maxX - minX + 1,
+        height: maxY - minY + 1,
+      });
+    }
+  }
+
+  return components;
+}
+
+/**
+ * 作用：
+ * 基于等宽假设构造一套备用字符边界。
+ *
+ * 为什么这样写：
+ * 当列投影谷值极弱时，至少要有一套稳定可比较的保底切分。
+ * 等宽分割虽然不总是最好，但作为备用候选很有价值。
+ *
+ * 输入：
+ * @param {number[]} projection - 列投影数组。
+ *
+ * 输出：
+ * @returns {number[]} 五个边界索引。
+ *
+ * 注意：
+ * - 返回值始终覆盖完整宽度。
+ * - 这里只负责构造候选，不负责判断优劣。
+ */
+function buildEqualWidthGlyphBoundaries(projection) {
+  const width = Array.isArray(projection) ? projection.length : 0;
+  return [
+    0,
+    Math.floor(width * 0.25),
+    Math.floor(width * 0.5),
+    Math.floor(width * 0.75),
+    width,
+  ];
+}
+
+/**
+ * 作用：
+ * 尝试用连通块结构构造更贴近字符本体的备用切分。
+ *
+ * 为什么这样写：
+ * 当前 captcha 很多字符间仍有可分离的主连通块。
+ * 在能识别出 4 个主要块时，用它们的中点来切分，通常比纯等宽更接近真实字符边界。
+ *
+ * 输入：
+ * @param {Uint8Array} mask - 二值掩码。
+ * @param {number} width - 图片宽度。
+ * @param {number} height - 图片高度。
+ * @param {object} bounds - 整体文字边界框。
+ *
+ * 输出：
+ * @returns {number[]|null} 五个局部边界索引；无法构造时返回 null。
+ *
+ * 注意：
+ * - 这里只使用面积最大的 4 个主块。
+ * - 若主块不足 4 个，则认为该方法不适用。
+ */
+function buildComponentGuidedBoundaries(mask, width, height, bounds) {
+  const components = findConnectedComponents(mask, width, height, bounds)
+    .filter((component) => component.pixelCount >= 4)
+    .sort((left, right) => right.pixelCount - left.pixelCount)
+    .slice(0, 4)
+    .sort((left, right) => left.minX - right.minX);
+
+  if (components.length !== 4) {
+    return null;
+  }
+
+  const boundaries = [0];
+
+  for (let index = 0; index < components.length - 1; index += 1) {
+    const left = components[index];
+    const right = components[index + 1];
+    const splitX = Math.max(
+      bounds.minX,
+      Math.min(bounds.maxX + 1, Math.round((left.maxX + right.minX + 1) / 2))
+    );
+
+    boundaries.push(splitX - bounds.minX);
+  }
+
+  boundaries.push(bounds.maxX - bounds.minX + 1);
+  return boundaries;
+}
+
+/**
+ * 作用：
+ * 评估一套字符切分的稳定性与质量。
+ *
+ * 为什么这样写：
+ * 现在 checker 不应把“明显坏分割”的图也浪费成一次提交。
+ * 先给切分打分，训练和 live 都能基于同一份质量指标做判断。
+ *
+ * 输入：
+ * @param {Uint8Array} mask - 二值掩码。
+ * @param {number} width - 图片宽度。
+ * @param {number} height - 图片高度。
+ * @param {object} bounds - 整体文字边界框。
+ * @param {number[]} boundaries - 候选边界。
+ * @param {number[]} projection - 列投影数组。
+ *
+ * 输出：
+ * @returns {object} 包含 penalty、quality 和辅助细节的打分结果。
+ *
+ * 注意：
+ * - `quality` 越接近 1 越好。
+ * - 这里只评估相对质量，不等价于真正的识别置信度。
+ */
+function scoreGlyphSegmentation(mask, width, height, bounds, boundaries, projection) {
+  const glyphBoundsList = [];
+  const widths = [];
+  const densities = [];
+  const glyphHeight = Math.max(1, bounds.maxY - bounds.minY + 1);
+  const cutPenalty =
+    projection[Math.max(0, (boundaries[1] || 0) - 1)] +
+    projection[Math.min(projection.length - 1, boundaries[1] || 0)] +
+    projection[Math.max(0, (boundaries[2] || 0) - 1)] +
+    projection[Math.min(projection.length - 1, boundaries[2] || 0)] +
+    projection[Math.max(0, (boundaries[3] || 0) - 1)] +
+    projection[Math.min(projection.length - 1, boundaries[3] || 0)];
+  const normalizedCutPenalty = Number(
+    (cutPenalty / Math.max(1, glyphHeight * 6)).toFixed(6)
+  );
+
+  for (let index = 0; index < 4; index += 1) {
+    const glyphBounds = extractGlyphBounds(
+      mask,
+      width,
+      height,
+      bounds,
+      boundaries[index],
+      boundaries[index + 1]
+    );
+
+    glyphBoundsList.push(glyphBounds);
+    widths.push(Math.max(1, glyphBounds.maxX - glyphBounds.minX + 1));
+    densities.push(computeForegroundDensity(mask, width, glyphBounds));
+  }
+
+  const meanWidth = widths.reduce((sum, current) => sum + current, 0) / widths.length;
+  const meanDensity = densities.reduce((sum, current) => sum + current, 0) / densities.length;
+  const widthVariance =
+    widths.reduce((sum, current) => sum + (current - meanWidth) * (current - meanWidth), 0) /
+    widths.length;
+  const densityVariance =
+    densities.reduce((sum, current) => sum + (current - meanDensity) * (current - meanDensity), 0) /
+    densities.length;
+  const widthConsistency = Number((Math.sqrt(widthVariance) / Math.max(1, meanWidth)).toFixed(6));
+  const inkDensityBalance = Number(Math.sqrt(densityVariance).toFixed(6));
+  const serifEdgeTruncationRisk = Number(
+    (
+      glyphBoundsList.filter(
+        (glyphBounds) =>
+          glyphBounds.minY <= bounds.minY + 1 || glyphBounds.maxY >= bounds.maxY - 1
+      ).length / glyphBoundsList.length
+    ).toFixed(6)
+  );
+  const boundaryValleyStrength = Number((1 - Math.min(1, normalizedCutPenalty)).toFixed(6));
+  const totalPenalty = Number(
+    (
+      widthConsistency * 1.6 +
+      inkDensityBalance * 1.4 +
+      normalizedCutPenalty * 1.3 +
+      serifEdgeTruncationRisk * 0.9
+    ).toFixed(6)
+  );
+  const quality = Number(Math.max(0, Math.min(1, 1 - totalPenalty / 2.8)).toFixed(6));
+
+  return {
+    penalty: totalPenalty,
+    quality,
+    widthConsistency,
+    inkDensityBalance,
+    serifEdgeTruncationRisk,
+    boundaryValleyStrength,
+    glyphBoundsList,
+  };
+}
+
+/**
+ * 作用：
+ * 在多套候选切分里选出当前最稳的一套。
+ *
+ * 为什么这样写：
+ * 当前计划要求分割升级成双分支，并把 connected-component 作为辅助定位。
+ * 这里统一比较列投影切分、等宽切分和连通块引导切分，保证训练和 live 共用同一条决策逻辑。
+ *
+ * 输入：
+ * @param {Uint8Array} mask - 二值掩码。
+ * @param {number} width - 图片宽度。
+ * @param {number} height - 图片高度。
+ * @param {object} bounds - 整体文字边界框。
+ * @param {number[]} projection - 列投影数组。
+ *
+ * 输出：
+ * @returns {object} 选中的边界和完整诊断结果。
+ *
+ * 注意：
+ * - 当前至少会比较主切分和等宽切分两套方案。
+ * - 若连通块方案不可用，会自动跳过而不报错。
+ */
+function selectBestGlyphSegmentation(mask, width, height, bounds, projection) {
+  const candidates = [
+    {
+      method: "projection",
+      boundaries: chooseGlyphBoundaries(projection),
+    },
+    {
+      method: "equal-width",
+      boundaries: buildEqualWidthGlyphBoundaries(projection),
+    },
+  ];
+  const componentGuidedBoundaries = buildComponentGuidedBoundaries(mask, width, height, bounds);
+
+  if (Array.isArray(componentGuidedBoundaries)) {
+    candidates.push({
+      method: "components",
+      boundaries: componentGuidedBoundaries,
+    });
+  }
+
+  const scoredCandidates = candidates.map((candidate) => ({
+    ...candidate,
+    score: scoreGlyphSegmentation(
+      mask,
+      width,
+      height,
+      bounds,
+      candidate.boundaries,
+      projection
+    ),
+  }));
+  const selected = scoredCandidates.sort((left, right) => left.score.penalty - right.score.penalty)[0];
+
+  return {
+    selectedMethod: selected.method,
+    boundaries: selected.boundaries,
+    segmentationQuality: selected.score.quality,
+    segmentationScore: selected.score,
+    candidateScores: scoredCandidates.map((candidate) => ({
+      method: candidate.method,
+      penalty: candidate.score.penalty,
+      quality: candidate.score.quality,
+      widthConsistency: candidate.score.widthConsistency,
+      inkDensityBalance: candidate.score.inkDensityBalance,
+      serifEdgeTruncationRisk: candidate.score.serifEdgeTruncationRisk,
+      boundaryValleyStrength: candidate.score.boundaryValleyStrength,
+    })),
+  };
+}
+
+/**
+ * 作用：
  * 从单张 captcha 图片中提取 4 个字符向量。
  *
  * 为什么这样写：
@@ -922,15 +1678,29 @@ function extractCaptchaGlyphVectorsFromDecodedImage(image, options = {}) {
   const grayscale = buildGrayscalePixels(image);
   const initialMaskResult = createInitialBinaryMask(grayscale, image.width, image.height);
   const mask = denoiseBinaryMask(initialMaskResult.mask, image.width, image.height);
-  const bounds = expandBounds(
+  const roughBounds = expandBounds(
     findMaskBounds(mask, image.width, image.height) || initialMaskResult.cropBox,
     image.width,
     image.height,
     1
   );
+  const bounds = expandBounds(
+    findMaskBounds(mask, image.width, image.height) || roughBounds,
+    image.width,
+    image.height,
+    1
+  );
   const projection = buildColumnProjection(mask, image.width, bounds);
-  const boundaries = chooseGlyphBoundaries(projection);
+  const segmentation = selectBestGlyphSegmentation(
+    mask,
+    image.width,
+    image.height,
+    bounds,
+    projection
+  );
+  const boundaries = segmentation.boundaries;
   const glyphVectors = [];
+  const glyphMetrics = [];
 
   for (let index = 0; index < 4; index += 1) {
     const glyphBounds = extractGlyphBounds(
@@ -941,17 +1711,28 @@ function extractCaptchaGlyphVectorsFromDecodedImage(image, options = {}) {
       boundaries[index],
       boundaries[index + 1]
     );
-
-    glyphVectors.push(
-      vectorizeMaskRegion(mask, image.width, glyphBounds, vectorWidth, vectorHeight)
+    const featureVector = extractGlyphFeatureVector(
+      mask,
+      image.width,
+      glyphBounds,
+      vectorWidth,
+      vectorHeight
     );
+
+    glyphVectors.push(featureVector.vector);
+    glyphMetrics.push({
+      ...featureVector.metrics,
+      bounds: glyphBounds,
+    });
   }
 
   return {
     glyphVectors,
+    glyphMetrics,
     threshold: initialMaskResult.threshold,
     bounds,
     boundaries,
+    segmentation,
     width: image.width,
     height: image.height,
   };
@@ -1053,45 +1834,373 @@ function buildPrototypeModel(samples) {
 
 /**
  * 作用：
- * 用字符原型模型预测单个字符向量。
+ * 按字符位置和标签把训练样本分组。
  *
  * 为什么这样写：
- * 训练和评估阶段都需要统一的最近邻打分逻辑。
+ * 这批 captcha 在第 1 位和第 4 位的分割偏差最明显。
+ * 先做位置分组后，后续 exemplar 和多原型都能优先学习“同一位置上的真实形态”。
+ *
+ * 输入：
+ * @param {Array<object>} samples - 字符样本数组。
+ *
+ * 输出：
+ * @returns {Map<string, Array<object>>} 以 `position:label` 为 key 的分组结果。
+ *
+ * 注意：
+ * - 只接收带 position、label、vector 的完整样本。
+ * - 返回值是 Map，方便后续保持确定性遍历顺序。
+ */
+function groupCharacterSamplesByPositionAndLabel(samples) {
+  const groups = new Map();
+
+  for (const sample of Array.isArray(samples) ? samples : []) {
+    const position = Number(sample && sample.position);
+    const label = String((sample && sample.label) || "");
+    const vector = Array.isArray(sample && sample.vector) ? sample.vector : [];
+
+    if (!Number.isInteger(position) || position < 0 || !label || vector.length === 0) {
+      continue;
+    }
+
+    const key = `${position}:${label}`;
+
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+
+    groups.get(key).push(sample);
+  }
+
+  return groups;
+}
+
+/**
+ * 作用：
+ * 从一组样本里挑出代表性的 exemplar 子集。
+ *
+ * 为什么这样写：
+ * 把所有样本都塞进模型虽然最直接，但 JSON 会越来越大。
+ * 用确定性的 farthest-point 近似挑一小批代表样本，能兼顾覆盖率和模型体积。
+ *
+ * 输入：
+ * @param {Array<object>} samples - 同标签同位置的样本数组。
+ * @param {number} limit - 最多保留多少个 exemplar。
+ *
+ * 输出：
+ * @returns {Array<object>} 代表性 exemplar 列表。
+ *
+ * 注意：
+ * - 当前算法是确定性的，不引入随机数。
+ * - 样本数不超过上限时会原样返回。
+ */
+function selectRepresentativeExemplars(samples, limit) {
+  const source = Array.isArray(samples) ? samples : [];
+  const exemplarLimit = Math.max(1, Number(limit || 1));
+
+  if (source.length <= exemplarLimit) {
+    return [...source];
+  }
+
+  const selected = [source[0]];
+  const remaining = source.slice(1);
+
+  while (selected.length < exemplarLimit && remaining.length > 0) {
+    let bestIndex = 0;
+    let bestDistance = -1;
+
+    for (let index = 0; index < remaining.length; index += 1) {
+      const candidate = remaining[index];
+      let nearestDistance = Number.POSITIVE_INFINITY;
+
+      for (const picked of selected) {
+        nearestDistance = Math.min(nearestDistance, squaredDistance(candidate.vector, picked.vector));
+      }
+
+      if (nearestDistance > bestDistance) {
+        bestDistance = nearestDistance;
+        bestIndex = index;
+      }
+    }
+
+    selected.push(remaining.splice(bestIndex, 1)[0]);
+  }
+
+  return selected;
+}
+
+/**
+ * 作用：
+ * 为同一位置同一标签的样本构建多个形态簇原型。
+ *
+ * 为什么这样写：
+ * 同一个字符在当前 captcha 里并不是单一均值形态。
+ * 用多个子原型覆盖不同扭曲/粗细/位姿，可以明显降低 `C/c`、`P/p`、`#/H` 这类混淆。
+ *
+ * 输入：
+ * @param {Array<object>} samples - 同标签同位置的样本数组。
+ * @param {number} clusterCount - 最多生成多少个子原型。
+ *
+ * 输出：
+ * @returns {Array<object>} 多原型列表。
+ *
+ * 注意：
+ * - 当前采用确定性的 farthest-seed + 最近分配。
+ * - 这里只在单组内部建簇，不做跨标签聚类。
+ */
+function buildMultiPrototypeClusters(samples, clusterCount) {
+  const source = Array.isArray(samples) ? samples : [];
+  const maxClusterCount = Math.max(1, Math.min(source.length, Number(clusterCount || 1)));
+
+  if (source.length === 0) {
+    return [];
+  }
+
+  if (source.length === 1 || maxClusterCount === 1) {
+    return [
+      {
+        count: source.length,
+        vector: source[0].vector.map((value) => Number(value.toFixed(6))),
+      },
+    ];
+  }
+
+  const seeds = selectRepresentativeExemplars(source, maxClusterCount).map((sample) => sample.vector);
+  const clusters = seeds.map((seed) => ({
+    count: 0,
+    sum: new Array(seed.length).fill(0),
+  }));
+
+  for (const sample of source) {
+    let bestClusterIndex = 0;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (let index = 0; index < seeds.length; index += 1) {
+      const distance = squaredDistance(sample.vector, seeds[index]);
+
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestClusterIndex = index;
+      }
+    }
+
+    const cluster = clusters[bestClusterIndex];
+    cluster.count += 1;
+
+    for (let index = 0; index < sample.vector.length; index += 1) {
+      cluster.sum[index] += sample.vector[index];
+    }
+  }
+
+  return clusters
+    .filter((cluster) => cluster.count > 0)
+    .map((cluster) => ({
+      count: cluster.count,
+      vector: cluster.sum.map((value) => Number((value / cluster.count).toFixed(6))),
+    }));
+}
+
+/**
+ * 作用：
+ * 构建按字符位置组织的 exemplar 索引。
+ *
+ * 为什么这样写：
+ * live 识别最容易被“同字符不同位置”的分割差异拖慢。
+ * 位置感知 exemplar 让预测时优先参考同一位置的真实样本形状。
+ *
+ * 输入：
+ * @param {Array<object>} samples - 单字符样本数组。
+ * @param {number} exemplarLimit - 每个位置/标签最多保留多少 exemplar。
+ *
+ * 输出：
+ * @returns {object} 位置感知 exemplar 索引。
+ *
+ * 注意：
+ * - 索引结果会直接写进模型 JSON。
+ * - exemplar 只保留必要字段，避免模型文件过大。
+ */
+function buildPositionAwareExemplarIndex(samples, exemplarLimit) {
+  const groups = groupCharacterSamplesByPositionAndLabel(samples);
+  const index = {};
+
+  for (const [key, group] of Array.from(groups.entries()).sort(([left], [right]) =>
+    left.localeCompare(right)
+  )) {
+    const [positionText, label] = key.split(":");
+    const position = String(positionText);
+
+    if (!index[position]) {
+      index[position] = {};
+    }
+
+    index[position][label] = selectRepresentativeExemplars(group, exemplarLimit).map((sample) => ({
+      sampleId: sample.sampleId,
+      vector: sample.vector.map((value) => Number(value.toFixed(6))),
+    }));
+  }
+
+  return index;
+}
+
+/**
+ * 作用：
+ * 构建按字符位置组织的多原型索引。
+ *
+ * 为什么这样写：
+ * 相比单均值 prototype，多原型能覆盖同字符的多个衬线形态簇。
+ * 再叠加位置维度后，能更稳地处理当前 captcha 的位置偏差。
+ *
+ * 输入：
+ * @param {Array<object>} samples - 单字符样本数组。
+ * @param {number} clusterCount - 每个位置/标签最多保留多少个子原型。
+ *
+ * 输出：
+ * @returns {object} 位置感知多原型索引。
+ *
+ * 注意：
+ * - 索引结果会直接写进模型 JSON。
+ * - 当前 cluster 数量固定，由训练配置决定。
+ */
+function buildPositionAwarePrototypeIndex(samples, clusterCount) {
+  const groups = groupCharacterSamplesByPositionAndLabel(samples);
+  const index = {};
+
+  for (const [key, group] of Array.from(groups.entries()).sort(([left], [right]) =>
+    left.localeCompare(right)
+  )) {
+    const [positionText, label] = key.split(":");
+    const position = String(positionText);
+
+    if (!index[position]) {
+      index[position] = {};
+    }
+
+    index[position][label] = buildMultiPrototypeClusters(group, clusterCount);
+  }
+
+  return index;
+}
+
+/**
+ * 作用：
+ * 计算当前字符在某个标签下的混合距离分数。
+ *
+ * 为什么这样写：
+ * 当前计划要求把分类器升级成“位置 exemplar + 位置多原型 + 全局原型”的混合打分。
+ * 单独抽出这一步后，训练评估、top-k 排序和 live checker 都能复用同一条评分规则。
+ *
+ * 输入：
+ * @param {number[]} vector - 待预测字符向量。
+ * @param {object} model - 本地模型。
+ * @param {number} position - 当前字符位置。
+ * @param {string} label - 候选标签。
+ *
+ * 输出：
+ * @returns {object} 当前标签的打分明细。
+ *
+ * 注意：
+ * - 没有某一层索引时，会自动跳过对应分量。
+ * - 返回值中的 `score` 越小越好。
+ */
+function scoreCharacterLabel(vector, model, position, label) {
+  const globalPrototype = model && model.prototypes ? model.prototypes[label] : null;
+  const positionKey = String(position);
+  const positionPrototypeList =
+    model &&
+    model.positionPrototypes &&
+    model.positionPrototypes[positionKey] &&
+    Array.isArray(model.positionPrototypes[positionKey][label])
+      ? model.positionPrototypes[positionKey][label]
+      : [];
+  const positionExemplars =
+    model &&
+    model.positionExemplars &&
+    model.positionExemplars[positionKey] &&
+    Array.isArray(model.positionExemplars[positionKey][label])
+      ? model.positionExemplars[positionKey][label]
+      : [];
+  const exemplarDistance =
+    positionExemplars.length > 0
+      ? Math.min(...positionExemplars.map((exemplar) => squaredDistance(vector, exemplar.vector)))
+      : Number.POSITIVE_INFINITY;
+  const positionPrototypeDistance =
+    positionPrototypeList.length > 0
+      ? Math.min(...positionPrototypeList.map((prototype) => squaredDistance(vector, prototype.vector)))
+      : Number.POSITIVE_INFINITY;
+  const globalPrototypeDistance = globalPrototype
+    ? squaredDistance(vector, globalPrototype.vector)
+    : Number.POSITIVE_INFINITY;
+  const weightedParts = [];
+
+  if (Number.isFinite(exemplarDistance)) {
+    weightedParts.push({ weight: 0.15, value: exemplarDistance });
+  }
+
+  if (Number.isFinite(positionPrototypeDistance)) {
+    weightedParts.push({ weight: 0.25, value: positionPrototypeDistance });
+  }
+
+  if (Number.isFinite(globalPrototypeDistance)) {
+    weightedParts.push({ weight: 0.6, value: globalPrototypeDistance });
+  }
+
+  const totalWeight = weightedParts.reduce((sum, current) => sum + current.weight, 0);
+  const score =
+    totalWeight > 0
+      ? weightedParts.reduce((sum, current) => sum + current.value * current.weight, 0) / totalWeight
+      : Number.POSITIVE_INFINITY;
+
+  return {
+    label,
+    score: Number(score.toFixed(6)),
+    exemplarDistance: Number.isFinite(exemplarDistance)
+      ? Number(exemplarDistance.toFixed(6))
+      : null,
+    positionPrototypeDistance: Number.isFinite(positionPrototypeDistance)
+      ? Number(positionPrototypeDistance.toFixed(6))
+      : null,
+    globalPrototypeDistance: Number.isFinite(globalPrototypeDistance)
+      ? Number(globalPrototypeDistance.toFixed(6))
+      : null,
+  };
+}
+
+/**
+ * 作用：
+ * 用字符模型预测单个字符向量，并返回 top-k 排名。
+ *
+ * 为什么这样写：
+ * 当前计划要求训练报告和 live artifact 都保留 top-k。
+ * 先把每个标签的分数都算出来，再统一排序，就能同时满足 top-1 和分析需求。
  *
  * 输入：
  * @param {number[]} vector - 待预测字符向量。
  * @param {object} model - 原型模型。
+ * @param {number} position - 当前字符位置。
+ * @param {number} topK - 最多返回多少个候选标签。
  *
  * 输出：
- * @returns {object} 最佳标签和距离。
+ * @returns {object} 最佳标签、距离和 top-k 排名。
  *
  * 注意：
- * - 当前只返回最优字符，不返回 top-k。
  * - 如果模型为空会直接抛错。
+ * - 返回的 `distance` 等于 top-1 的混合分数。
  */
-function predictCharacterVector(vector, model) {
+function predictCharacterVector(vector, model, position = 0, topK = 3) {
   const labels = Array.isArray(model && model.labels) ? model.labels : [];
 
   if (labels.length === 0) {
     throw new Error("Prototype model is empty.");
   }
 
-  let bestLabel = labels[0];
-  let bestDistance = Number.POSITIVE_INFINITY;
-
-  for (const label of labels) {
-    const prototype = model.prototypes[label];
-    const distance = squaredDistance(vector, prototype.vector);
-
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      bestLabel = label;
-    }
-  }
+  const ranked = labels
+    .map((label) => scoreCharacterLabel(vector, model, position, label))
+    .sort((left, right) => left.score - right.score);
+  const best = ranked[0];
 
   return {
-    label: bestLabel,
-    distance: Number(bestDistance.toFixed(6)),
+    label: best.label,
+    distance: best.score,
+    topK: ranked.slice(0, Math.max(1, topK)),
   };
 }
 
@@ -1114,12 +2223,33 @@ function predictCharacterVector(vector, model) {
  * - 返回的 `distances` 与字符位置一一对应。
  */
 function predictCaptchaText(glyphVectors, model) {
-  const predictions = glyphVectors.map((vector) => predictCharacterVector(vector, model));
+  const predictions = glyphVectors.map((vector, index) =>
+    predictCharacterVector(vector, model, index, 3)
+  );
+  const confidenceParts = predictions.map((prediction) => {
+    const bestDistance = prediction.distance;
+    const runnerUpDistance =
+      Array.isArray(prediction.topK) && prediction.topK[1]
+        ? prediction.topK[1].score
+        : Number.POSITIVE_INFINITY;
+
+    if (!Number.isFinite(bestDistance) || !Number.isFinite(runnerUpDistance) || runnerUpDistance <= 0) {
+      return 0;
+    }
+
+    return Math.max(0, Math.min(1, (runnerUpDistance - bestDistance) / runnerUpDistance));
+  });
+  const averageConfidence =
+    confidenceParts.length > 0
+      ? confidenceParts.reduce((sum, current) => sum + current, 0) / confidenceParts.length
+      : 0;
 
   return {
     text: predictions.map((prediction) => prediction.label).join(""),
     characters: predictions.map((prediction) => prediction.label),
     distances: predictions.map((prediction) => prediction.distance),
+    topK: predictions.map((prediction) => prediction.topK),
+    confidence: Number(Math.max(0, Math.min(1, averageConfidence)).toFixed(6)),
   };
 }
 
@@ -1156,9 +2286,56 @@ function predictCaptchaDataUrl(dataUrl, model, options = {}) {
     characters: prediction.characters,
     distances: prediction.distances,
     averageDistance: Number(averageDistance.toFixed(6)),
+    confidence: prediction.confidence,
+    topK: prediction.topK,
     threshold: extraction.threshold,
     bounds: extraction.bounds,
     boundaries: extraction.boundaries,
+    glyphMetrics: extraction.glyphMetrics,
+    segmentation: extraction.segmentation,
+  };
+}
+
+/**
+ * 作用：
+ * 用本地原型模型直接预测一张本地 PNG captcha 图片。
+ *
+ * 为什么这样写：
+ * `captcha:suggest` 面对的是磁盘上的采集图片，而不是浏览器里的 data URL。
+ * 增加这个入口后，标注预填和 live checker 就能共享同一套本地模型，不再依赖 Tesseract。
+ *
+ * 输入：
+ * @param {string} imagePath - captcha 图片文件路径。
+ * @param {object} model - 已加载的本地原型模型。
+ * @param {object} options - 预处理配置。
+ *
+ * 输出：
+ * @returns {object} 本地模型预测结果。
+ *
+ * 注意：
+ * - 返回结构刻意与 `predictCaptchaDataUrl()` 保持一致，方便上层复用。
+ * - 输入图片当前要求为 PNG；若后续要支持其他格式，需要扩展解码入口。
+ */
+function predictCaptchaImagePath(imagePath, model, options = {}) {
+  const extraction = extractCaptchaGlyphVectors(imagePath, options);
+  const prediction = predictCaptchaText(extraction.glyphVectors, model);
+  const averageDistance =
+    prediction.distances.length > 0
+      ? prediction.distances.reduce((sum, current) => sum + current, 0) / prediction.distances.length
+      : Number.POSITIVE_INFINITY;
+
+  return {
+    text: prediction.text,
+    characters: prediction.characters,
+    distances: prediction.distances,
+    averageDistance: Number(averageDistance.toFixed(6)),
+    confidence: prediction.confidence,
+    topK: prediction.topK,
+    threshold: extraction.threshold,
+    bounds: extraction.bounds,
+    boundaries: extraction.boundaries,
+    glyphMetrics: extraction.glyphMetrics,
+    segmentation: extraction.segmentation,
   };
 }
 
@@ -1196,6 +2373,8 @@ function buildCharacterSamples(records, trainingDir, options) {
         position: index,
         label: record.text[index],
         vector: extraction.glyphVectors[index],
+        glyphMetrics: extraction.glyphMetrics[index],
+        segmentationQuality: extraction.segmentation.segmentationQuality,
       });
     }
   }
@@ -1255,6 +2434,12 @@ function evaluateCaptchaRecords(records, trainingDir, model, options) {
       exactMatch: prediction.text === expected,
       characters: prediction.characters,
       distances: prediction.distances,
+      topK: prediction.topK,
+      confidence: prediction.confidence,
+      segmentationQuality: extraction.segmentation.segmentationQuality,
+      segmentationMethod: extraction.segmentation.selectedMethod,
+      segmentationScore: extraction.segmentation.segmentationScore,
+      glyphMetrics: extraction.glyphMetrics,
       image: record.image,
     });
   }
@@ -1271,6 +2456,287 @@ function evaluateCaptchaRecords(records, trainingDir, model, options) {
         ? Number((characterMatchCount / characterTotalCount).toFixed(4))
         : 0,
     predictions,
+  };
+}
+
+/**
+ * 作用：
+ * 统计预测结果里按字符位置划分的准确率。
+ *
+ * 为什么这样写：
+ * 当前数据已经表明第 1 位和第 4 位比中间两位更难。
+ * 把位置指标单独拉出来，后续才能判断分割升级是否真的起作用。
+ *
+ * 输入：
+ * @param {Array<object>} predictions - 逐条 captcha 预测结果。
+ *
+ * 输出：
+ * @returns {Array<object>} 每个字符位置的准确率摘要。
+ *
+ * 注意：
+ * - 当前固定按 4 位 captcha 统计。
+ * - 若未来长度变化，需要同步调整这里的循环上限。
+ */
+function buildPositionMetrics(predictions) {
+  const totals = [0, 0, 0, 0];
+  const correct = [0, 0, 0, 0];
+
+  for (const row of Array.isArray(predictions) ? predictions : []) {
+    const expected = String(row.expectedText || "");
+    const actual = Array.isArray(row.characters) ? row.characters : [];
+
+    for (let index = 0; index < Math.min(4, expected.length, actual.length); index += 1) {
+      totals[index] += 1;
+
+      if (expected[index] === actual[index]) {
+        correct[index] += 1;
+      }
+    }
+  }
+
+  return totals.map((total, index) => ({
+    position: index,
+    total,
+    correct: correct[index],
+    accuracy: total > 0 ? Number((correct[index] / total).toFixed(4)) : 0,
+  }));
+}
+
+/**
+ * 作用：
+ * 聚合预测结果中的字符混淆对。
+ *
+ * 为什么这样写：
+ * 当前精度提升最需要的不是更多总数，而是知道最常错的是哪些 pair。
+ * 把混淆对聚合出来后，后续补数和特征迭代都能更有针对性。
+ *
+ * 输入：
+ * @param {Array<object>} predictions - 逐条 captcha 预测结果。
+ * @param {number} limit - 最多返回多少条。
+ *
+ * 输出：
+ * @returns {Array<object>} 按出现次数排序的混淆摘要。
+ *
+ * 注意：
+ * - 只统计错位字符，不统计整串是否命中。
+ * - 默认输出前 20 条。
+ */
+function buildConfusionSummary(predictions, limit = 20) {
+  const counter = new Map();
+
+  for (const row of Array.isArray(predictions) ? predictions : []) {
+    const expected = String(row.expectedText || "");
+    const actual = Array.isArray(row.characters) ? row.characters : [];
+
+    for (let index = 0; index < Math.min(expected.length, actual.length); index += 1) {
+      if (expected[index] === actual[index]) {
+        continue;
+      }
+
+      const key = `${expected[index]}->${actual[index]}`;
+      counter.set(key, (counter.get(key) || 0) + 1);
+    }
+  }
+
+  return Array.from(counter.entries())
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, Math.max(1, limit))
+    .map(([pair, count]) => ({
+      pair,
+      count,
+    }));
+}
+
+/**
+ * 作用：
+ * 汇总训练字符覆盖到哪些业务类别。
+ *
+ * 为什么这样写：
+ * 用户希望把数据补到 400-500 张，但不是盲补。
+ * 先按 digits / uppercase / lowercase / symbols 聚合覆盖，才能看出下一轮该补哪类。
+ *
+ * 输入：
+ * @param {object} prototypeCounts - 每个字符的训练样本数。
+ *
+ * 输出：
+ * @returns {object} 聚合后的类别覆盖统计。
+ *
+ * 注意：
+ * - 当前把 `@ # + =` 归为 symbols。
+ * - 这里只统计训练覆盖，不代表识别效果。
+ */
+function buildCharacterCategoryCoverage(prototypeCounts) {
+  const summary = {
+    digits: 0,
+    uppercase: 0,
+    lowercase: 0,
+    symbols: 0,
+  };
+
+  for (const [label, count] of Object.entries(prototypeCounts || {})) {
+    if (/^[0-9]$/u.test(label)) {
+      summary.digits += count;
+    } else if (/^[A-Z]$/u.test(label)) {
+      summary.uppercase += count;
+    } else if (/^[a-z]$/u.test(label)) {
+      summary.lowercase += count;
+    } else {
+      summary.symbols += count;
+    }
+  }
+
+  return summary;
+}
+
+/**
+ * 作用：
+ * 汇总符号字符相关的错误率。
+ *
+ * 为什么这样写：
+ * `#`、`=`、`+`、`@` 是当前 hardest cases 的一部分。
+ * 单独看符号错误率，能帮助判断衬线特征是否真的对符号识别有帮助。
+ *
+ * 输入：
+ * @param {Array<object>} predictions - 逐条 captcha 预测结果。
+ *
+ * 输出：
+ * @returns {object} 符号相关错误统计。
+ *
+ * 注意：
+ * - 只统计期待字符是符号的位点。
+ * - 当前符号集合固定为 `@ # + =`。
+ */
+function buildSymbolErrorSummary(predictions) {
+  const symbolSet = new Set(["@", "#", "+", "="]);
+  let total = 0;
+  let errors = 0;
+
+  for (const row of Array.isArray(predictions) ? predictions : []) {
+    const expected = String(row.expectedText || "");
+    const actual = Array.isArray(row.characters) ? row.characters : [];
+
+    for (let index = 0; index < Math.min(expected.length, actual.length); index += 1) {
+      if (!symbolSet.has(expected[index])) {
+        continue;
+      }
+
+      total += 1;
+
+      if (expected[index] !== actual[index]) {
+        errors += 1;
+      }
+    }
+  }
+
+  return {
+    total,
+    errors,
+    errorRate: total > 0 ? Number((errors / total).toFixed(4)) : 0,
+  };
+}
+
+/**
+ * 作用：
+ * 汇总“衬线体 hard cases”相关混淆。
+ *
+ * 为什么这样写：
+ * 用户已经明确指出这些 captcha 看起来像衬线体英文。
+ * 因此分析报告必须单独告诉我们：大小写、符号、形近字符组到底错在哪些 pair 上。
+ *
+ * 输入：
+ * @param {Array<object>} predictions - 逐条 captcha 预测结果。
+ * @param {number} limit - 最多返回多少条摘要。
+ *
+ * 输出：
+ * @returns {Array<object>} 按出现次数排序的衬线 hard-case 混淆摘要。
+ *
+ * 注意：
+ * - 当前规则覆盖三类：大小写同字母、符号/字母数字、预定义结构相近组。
+ * - 这是分析启发式，不是业务真值。
+ */
+function buildSerifConfusionSummary(predictions, limit = 20) {
+  const structuralGroups = [
+    new Set(["C", "c"]),
+    new Set(["P", "p"]),
+    new Set(["K", "k"]),
+    new Set(["S", "s"]),
+    new Set(["#", "H"]),
+    new Set(["=", "t"]),
+    new Set(["7", "+"]),
+    new Set(["@", "a", "q"]),
+  ];
+  const counter = new Map();
+
+  function isSerifHardCase(expected, actual) {
+    if (expected === actual) {
+      return false;
+    }
+
+    if (expected.toLowerCase() === actual.toLowerCase()) {
+      return true;
+    }
+
+    if (/[@#+=]/u.test(expected) || /[@#+=]/u.test(actual)) {
+      return true;
+    }
+
+    return structuralGroups.some((group) => group.has(expected) && group.has(actual));
+  }
+
+  for (const row of Array.isArray(predictions) ? predictions : []) {
+    const expected = String(row.expectedText || "");
+    const actual = Array.isArray(row.characters) ? row.characters : [];
+
+    for (let index = 0; index < Math.min(expected.length, actual.length); index += 1) {
+      if (!isSerifHardCase(expected[index], actual[index])) {
+        continue;
+      }
+
+      const key = `${expected[index]}->${actual[index]}`;
+      counter.set(key, (counter.get(key) || 0) + 1);
+    }
+  }
+
+  return Array.from(counter.entries())
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, Math.max(1, limit))
+    .map(([pair, count]) => ({
+      pair,
+      count,
+    }));
+}
+
+/**
+ * 作用：
+ * 根据 holdout 单次命中率估算 5 次 fresh captcha 内的成功率。
+ *
+ * 为什么这样写：
+ * 用户真正关心的是“5 次内能不能过”，而不是单次 exact match 数字本身。
+ * 用独立近似先给一个离线代理指标，后续再拿 live benchmark 校正。
+ *
+ * 输入：
+ * @param {Array<object>} predictions - holdout 预测列表。
+ * @param {number} maxAttempts - 最大 fresh captcha 次数。
+ *
+ * 输出：
+ * @returns {object} 单次与 5 次累计命中率估算。
+ *
+ * 注意：
+ * - 这里假设不同 fresh captcha 尝试近似独立。
+ * - 这只是离线估算，不等价于真实站点最终成功率。
+ */
+function buildFiveAttemptSuccessEstimate(predictions, maxAttempts = 5) {
+  const rows = Array.isArray(predictions) ? predictions : [];
+  const exactMatchCount = rows.filter((row) => row && row.exactMatch === true).length;
+  const singleAttemptRate = rows.length > 0 ? exactMatchCount / rows.length : 0;
+  const successWithinBudget = 1 - (1 - singleAttemptRate) ** Math.max(1, Number(maxAttempts || 5));
+
+  return {
+    maxAttempts: Math.max(1, Number(maxAttempts || 5)),
+    sampleCount: rows.length,
+    exactMatchCount,
+    singleAttemptExactMatchRate: Number(singleAttemptRate.toFixed(4)),
+    estimatedSuccessWithinBudget: Number(successWithinBudget.toFixed(4)),
   };
 }
 
@@ -1300,7 +2766,15 @@ function trainLocalCaptchaModel(trainingDir, outputDir, options = {}) {
   const valRecords = allRecords.filter((record) => record.split === "val");
   const testRecords = allRecords.filter((record) => record.split === "test");
   const characterSamples = buildCharacterSamples(trainRecords, resolvedTrainingDir, options);
-  const model = buildPrototypeModel(characterSamples);
+  const globalPrototypeModel = buildPrototypeModel(characterSamples);
+  const exemplarLimit = Math.max(6, Number(options.exemplarLimit || 10));
+  const clusterCount = Math.max(2, Number(options.clusterCount || 3));
+  const model = {
+    labels: globalPrototypeModel.labels,
+    prototypes: globalPrototypeModel.prototypes,
+    positionExemplars: buildPositionAwareExemplarIndex(characterSamples, exemplarLimit),
+    positionPrototypes: buildPositionAwarePrototypeIndex(characterSamples, clusterCount),
+  };
   const resolvedOutputDir = path.resolve(outputDir);
 
   fs.rmSync(resolvedOutputDir, { recursive: true, force: true });
@@ -1309,18 +2783,28 @@ function trainLocalCaptchaModel(trainingDir, outputDir, options = {}) {
   const trainEvaluation = evaluateCaptchaRecords(trainRecords, resolvedTrainingDir, model, options);
   const valEvaluation = evaluateCaptchaRecords(valRecords, resolvedTrainingDir, model, options);
   const testEvaluation = evaluateCaptchaRecords(testRecords, resolvedTrainingDir, model, options);
+  const holdoutPredictions = [...valEvaluation.predictions, ...testEvaluation.predictions];
+  const prototypeCounts = Object.fromEntries(
+    model.labels.map((label) => [label, model.prototypes[label].count])
+  );
   const summary = {
     trainingDir: resolvedTrainingDir,
     outputDir: resolvedOutputDir,
     vectorWidth: Number(options.vectorWidth || 18),
     vectorHeight: Number(options.vectorHeight || 22),
+    exemplarLimit,
+    clusterCount,
     trainCaptchaCount: trainRecords.length,
     valCaptchaCount: valRecords.length,
     testCaptchaCount: testRecords.length,
     prototypeLabelCount: model.labels.length,
-    prototypeCounts: Object.fromEntries(
-      model.labels.map((label) => [label, model.prototypes[label].count])
-    ),
+    prototypeCounts,
+    characterCategoryCoverage: buildCharacterCategoryCoverage(prototypeCounts),
+    positionMetrics: buildPositionMetrics(holdoutPredictions),
+    confusionSummary: buildConfusionSummary(holdoutPredictions, 20),
+    serifConfusionSummary: buildSerifConfusionSummary(holdoutPredictions, 20),
+    symbolErrorSummary: buildSymbolErrorSummary(holdoutPredictions),
+    fiveAttemptSuccessEstimate: buildFiveAttemptSuccessEstimate(holdoutPredictions, 5),
     metrics: {
       train: {
         recordCount: trainEvaluation.recordCount,
@@ -1348,6 +2832,40 @@ function trainLocalCaptchaModel(trainingDir, outputDir, options = {}) {
           vectorWidth: summary.vectorWidth,
           vectorHeight: summary.vectorHeight,
           labelCount: summary.prototypeLabelCount,
+          featureSchema: {
+            occupancyGrid: {
+              width: summary.vectorWidth,
+              height: summary.vectorHeight,
+              weight: 0.7,
+            },
+            projections: {
+              rowWeight: 1.05,
+              columnWeight: 1.05,
+            },
+            transitions: {
+              rowWeight: 1,
+              columnWeight: 1,
+            },
+            serifSensitiveProfiles: {
+              topWeight: 1.2,
+              bottomWeight: 1.2,
+              leftWeight: 1.15,
+              rightWeight: 1.15,
+            },
+            scalarFeatures: [
+              "ink_density",
+              "aspect_ratio",
+              "center_x",
+              "center_y",
+            ],
+          },
+          exemplarLimit,
+          clusterCount,
+          classifierWeights: {
+            exemplar: 0.15,
+            positionPrototype: 0.25,
+            globalPrototype: 0.6,
+          },
         },
         model,
       },
@@ -1391,6 +2909,7 @@ function trainLocalCaptchaModel(trainingDir, outputDir, options = {}) {
  * 注意：
  * - `--dataset` 复用训练准备阶段的 manifest 入口。
  * - `--vector-width` 和 `--vector-height` 只接受正整数。
+ * - `--cluster-count` 和 `--exemplar-limit` 用于控制多原型模型规模。
  */
 function parseLocalTrainArgs(argv) {
   const trainingOptions = parseTrainingArgs(argv);
@@ -1399,6 +2918,8 @@ function parseLocalTrainArgs(argv) {
     datasetInput: trainingOptions.datasetInput,
     vectorWidth: 18,
     vectorHeight: 22,
+    clusterCount: 3,
+    exemplarLimit: 10,
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -1409,6 +2930,12 @@ function parseLocalTrainArgs(argv) {
       index += 1;
     } else if (arg === "--vector-height") {
       options.vectorHeight = Number.parseInt(String(args[index + 1] || "22"), 10) || 22;
+      index += 1;
+    } else if (arg === "--cluster-count") {
+      options.clusterCount = Number.parseInt(String(args[index + 1] || "3"), 10) || 3;
+      index += 1;
+    } else if (arg === "--exemplar-limit") {
+      options.exemplarLimit = Number.parseInt(String(args[index + 1] || "10"), 10) || 10;
       index += 1;
     }
   }
@@ -1450,6 +2977,8 @@ function main(argv) {
     {
       vectorWidth: options.vectorWidth,
       vectorHeight: options.vectorHeight,
+      clusterCount: options.clusterCount,
+      exemplarLimit: options.exemplarLimit,
     }
   );
 
@@ -1475,30 +3004,52 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildCharacterCategoryCoverage,
   buildCharacterSamples,
   buildColumnProjection,
+  buildConfusionSummary,
+  buildEdgeDistanceProfile,
+  buildEqualWidthGlyphBoundaries,
+  buildFiveAttemptSuccessEstimate,
   buildGrayscalePixels,
   buildPrototypeModel,
+  buildPositionAwareExemplarIndex,
+  buildPositionAwarePrototypeIndex,
+  buildPositionMetrics,
+  buildRowProjection,
+  buildSerifConfusionSummary,
+  buildSymbolErrorSummary,
+  buildTransitionFeatures,
   chooseGlyphBoundaries,
   computeOtsuThreshold,
+  computeForegroundCenterOfMass,
+  computeForegroundDensity,
   createInitialBinaryMask,
   decodePng,
   denoiseBinaryMask,
   extractCaptchaGlyphVectorsFromDataUrl,
   extractCaptchaGlyphVectorsFromDecodedImage,
+  extractGlyphFeatureVector,
   evaluateCaptchaRecords,
   expandBounds,
   extractCaptchaGlyphVectors,
   extractGlyphBounds,
+  findConnectedComponents,
   findMaskBounds,
   loadLocalCaptchaModel,
   parseLocalTrainArgs,
   parseImageDataUrl,
   paethPredictor,
   predictCaptchaDataUrl,
+  predictCaptchaImagePath,
   predictCaptchaText,
   predictCharacterVector,
   readJsonLines,
+  resampleNumericSequence,
+  scoreCharacterLabel,
+  scoreGlyphSegmentation,
+  selectBestGlyphSegmentation,
+  selectRepresentativeExemplars,
   squaredDistance,
   trainLocalCaptchaModel,
   unfilterPngScanlines,

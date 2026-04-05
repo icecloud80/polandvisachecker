@@ -8,6 +8,7 @@ const {
   buildCaptchaCollectionRunName,
   buildCaptchaCollectionSamplePrefix,
   buildCaptchaSignatureDigest,
+  canReuseExistingCaptchaCollectionSnapshot,
   buildFinalAvailabilityLine,
   buildRefreshDiagnosticAttemptPrefix,
   buildRefreshDiagnosticRunName,
@@ -24,6 +25,7 @@ const {
   selectPreferredCaptchaLabelSource,
   selectBestCaptchaSolverResult,
   isConfidentLocalModelAttempt,
+  shouldPrepareChromeTabAfterNavigationError,
   promoteSnapshotToPostCaptchaSelection,
   shouldRecheckPostSubmitState,
   summarizeSnapshotForRefreshDiagnostic,
@@ -56,6 +58,29 @@ test("buildCaptchaCollectionRunName prefixes collection runs consistently", () =
   const runName = buildCaptchaCollectionRunName();
 
   assert.match(runName, /^captcha-collection-\d+$/);
+});
+
+/**
+ * 作用：
+ * 验证连续采集时，当前页只要仍在 captcha step 就可以直接复用。
+ *
+ * 为什么这样写：
+ * 我们刚把采集入口改成“优先复用当前 captcha 页”，避免每批都重新触发最脆弱的 Chrome 导航桥。
+ * 这条测试锁住新的起点判断，防止后续又退回到每批必定重新开页的行为。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入示例快照。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 当前只以 `isCaptchaStep` 作为复用条件。
+ * - 非 captcha 页面不应被误判成可复用。
+ */
+test("canReuseExistingCaptchaCollectionSnapshot accepts only captcha-step snapshots", () => {
+  assert.equal(canReuseExistingCaptchaCollectionSnapshot({ isCaptchaStep: true }), true);
+  assert.equal(canReuseExistingCaptchaCollectionSnapshot({ isCaptchaStep: false }), false);
 });
 
 /**
@@ -473,11 +498,11 @@ test("promoteSnapshotToPostCaptchaSelection converts the captcha transition stat
 
 /**
  * 作用：
- * 验证本地模型平均距离门槛会筛出更可信的 live captcha 结果。
+ * 验证本地模型会同时校验距离、分割质量和整体置信度。
  *
  * 为什么这样写：
- * 本地原型模型总能输出 4 位文本。
- * 如果不加门槛，checker 会把明显不靠谱的预测也直接提交出去。
+ * 新版 checker 不再允许“只要有 4 位就提交”。
+ * 这条测试锁住三道门槛，避免低质量分割重新溜进 live 提交流程。
  *
  * 输入：
  * @param {object} 无 - 直接传入示例本地模型结果和配置。
@@ -486,18 +511,22 @@ test("promoteSnapshotToPostCaptchaSelection converts the captcha transition stat
  * @returns {void} 无返回值。
  *
  * 注意：
- * - 当前默认阈值来自现有验证集距离分布。
- * - 后续若调阈值，需要同步更新这条测试。
+ * - 当前阈值来自现有训练集和 live 观察，不是严格概率。
+ * - 后续若调整质量门槛，需要同步更新这条测试。
  */
-test("isConfidentLocalModelAttempt accepts only low-distance local model guesses", () => {
+test("isConfidentLocalModelAttempt requires distance, segmentation quality, and confidence gates", () => {
   assert.equal(
     isConfidentLocalModelAttempt(
       {
         candidate: "A8Bd",
         averageDistance: 31.5,
+        segmentationQuality: 0.72,
+        modelConfidence: 0.22,
       },
       {
         localCaptchaModelMaxAverageDistance: 50,
+        localCaptchaModelMinSegmentationQuality: 0.44,
+        localCaptchaModelMinConfidence: 0.04,
       }
     ),
     true
@@ -507,9 +536,45 @@ test("isConfidentLocalModelAttempt accepts only low-distance local model guesses
       {
         candidate: "A8Bd",
         averageDistance: 54.2,
+        segmentationQuality: 0.72,
+        modelConfidence: 0.22,
       },
       {
         localCaptchaModelMaxAverageDistance: 50,
+        localCaptchaModelMinSegmentationQuality: 0.44,
+        localCaptchaModelMinConfidence: 0.04,
+      }
+    ),
+    false
+  );
+  assert.equal(
+    isConfidentLocalModelAttempt(
+      {
+        candidate: "A8Bd",
+        averageDistance: 31.5,
+        segmentationQuality: 0.3,
+        modelConfidence: 0.22,
+      },
+      {
+        localCaptchaModelMaxAverageDistance: 50,
+        localCaptchaModelMinSegmentationQuality: 0.44,
+        localCaptchaModelMinConfidence: 0.04,
+      }
+    ),
+    false
+  );
+  assert.equal(
+    isConfidentLocalModelAttempt(
+      {
+        candidate: "A8Bd",
+        averageDistance: 31.5,
+        segmentationQuality: 0.72,
+        modelConfidence: 0.01,
+      },
+      {
+        localCaptchaModelMaxAverageDistance: 50,
+        localCaptchaModelMinSegmentationQuality: 0.44,
+        localCaptchaModelMinConfidence: 0.04,
       }
     ),
     false
@@ -541,26 +606,32 @@ test("selectBestCaptchaSolverResult prefers a confident local model attempt", ()
         engine: "local-model",
         candidate: "A8Bd",
         averageDistance: 29.1,
+        segmentationQuality: 0.72,
+        modelConfidence: 0.18,
         isConfident: true,
       },
     ],
     {
       localCaptchaModelMaxAverageDistance: 50,
+      localCaptchaModelMinSegmentationQuality: 0.44,
+      localCaptchaModelMinConfidence: 0.04,
     }
   );
 
   assert.equal(result.captchaText, "A8Bd");
   assert.equal(result.winningAttempt.engine, "local-model");
   assert.equal(result.attempts.length, 1);
+  assert.equal(result.shouldSubmit, true);
+  assert.equal(result.rejectionReason, "");
 });
 
 /**
  * 作用：
- * 验证当没有高置信本地模型结果时，会退回到距离最低的本地模型猜测。
+ * 验证当没有高质量本地模型结果时，不会继续硬提交。
  *
  * 为什么这样写：
- * 用户已经要求移除 Tesseract。
- * 这条测试锁住新的 live checker 策略，避免后续又悄悄把 OCR 回退带回来。
+ * 这版计划要求把低质量分割直接筛掉，宁可刷新下一张 fresh captcha。
+ * 这条测试锁住“仍返回最佳候选用于日志，但不提交”的新契约。
  *
  * 输入：
  * @param {object} 无 - 直接传入示例本地模型尝试结果。
@@ -569,32 +640,40 @@ test("selectBestCaptchaSolverResult prefers a confident local model attempt", ()
  * @returns {void} 无返回值。
  *
  * 注意：
- * - 当前即使都不达标，也会提交距离最低的本地模型结果。
- * - 该策略依赖多轮重试来弥补单轮错误。
+ * - 当前仍会保留最佳候选，方便 live artifact 和日志排查。
+ * - 主流程应依据 `shouldSubmit` 决定刷新，而不是直接提交。
  */
-test("selectBestCaptchaSolverResult falls back to the lowest-distance local model attempt", () => {
+test("selectBestCaptchaSolverResult keeps the best local model guess but rejects low-quality submission", () => {
   const result = selectBestCaptchaSolverResult(
     [
       {
         engine: "local-model",
         candidate: "A8Bd",
         averageDistance: 46.2,
+        segmentationQuality: 0.28,
+        modelConfidence: 0.03,
         isConfident: false,
       },
       {
         engine: "local-model",
         candidate: "Qm9=",
         averageDistance: 52.4,
+        segmentationQuality: 0.6,
+        modelConfidence: 0.08,
         isConfident: false,
       },
     ],
     {
       localCaptchaModelMaxAverageDistance: 50,
+      localCaptchaModelMinSegmentationQuality: 0.44,
+      localCaptchaModelMinConfidence: 0.04,
     }
   );
 
   assert.equal(result.captchaText, "A8Bd");
   assert.equal(result.winningAttempt.engine, "local-model");
+  assert.equal(result.shouldSubmit, false);
+  assert.equal(result.rejectionReason, "model_quality_below_threshold");
 });
 
 /**
@@ -622,6 +701,35 @@ test("isChromeTabNotFoundError matches the recoverable missing-tab failure", () 
   );
   assert.equal(
     isChromeTabNotFoundError(new Error("Permission denied")),
+    false
+  );
+});
+
+/**
+ * 作用：
+ * 验证注册页导航失败时，只会在“目标签证 tab 不存在”这类错误下退回 prepareChromeTab。
+ *
+ * 为什么这样写：
+ * 我们刚把批量采集入口改成“先复用已有 tab，再按需 prepare”。
+ * 这条测试锁住 fallback 条件，避免后续把其他真实桥接异常误吞成可恢复路径。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入示例错误。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 当前只对白名单 missing-tab 文案返回 true。
+ * - 其他错误应继续向上抛出。
+ */
+test("shouldPrepareChromeTabAfterNavigationError only falls back for missing-tab errors", () => {
+  assert.equal(
+    shouldPrepareChromeTabAfterNavigationError(new Error("Poland visa Chrome tab not found.")),
+    true
+  );
+  assert.equal(
+    shouldPrepareChromeTabAfterNavigationError(new Error("Executing JavaScript through AppleScript is turned off.")),
     false
   );
 });

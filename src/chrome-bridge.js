@@ -288,7 +288,7 @@ async function focusChromeTab(url) {
     'set targetTabIndex to 0',
     'repeat with wi from 1 to count of windows',
     'repeat with ti from 1 to count of tabs of window wi',
-    `if (URL of tab ti of window wi contains ${JSON.stringify(targetHost)}) then`,
+    `if ((URL of tab ti of window wi) contains ${JSON.stringify(targetHost)}) then`,
     'set targetWindowIndex to wi',
     'set targetTabIndex to ti',
     'exit repeat',
@@ -330,6 +330,33 @@ async function clickChromeScreenPoint(screenPoint, url) {
 
 /**
  * 作用：
+ * 生成“准备 Chrome 标签页并导航到目标网址”的 AppleScript。
+ *
+ * 为什么这样写：
+ * 这里现在只保留最小可用的兜底导航逻辑：激活 Chrome，然后让 Chrome 自己用
+ * `open location` 打开目标网址。
+ * 复用已有签证标签页的逻辑已经在更前面的页面探测里处理过了，因此 fallback 越简单越稳。
+ *
+ * 输入：
+ * @param {string} url - 目标网址。
+ *
+ * 输出：
+ * @returns {string[]} AppleScript 逐行源码。
+ *
+ * 注意：
+ * - 这里只负责兜底打开目标网址，不负责复杂的标签页复用。
+ * - Chrome 对 `Get URL` 的 AppleScript 兼容性比 `open location` 更稳定，
+ *   因此这里显式使用 `tell application ... to Get URL ...`。
+ */
+function buildPrepareChromeTabAppleScript(url) {
+  return [
+    'tell application "Google Chrome" to activate',
+    `tell application "Google Chrome" to Get URL ${JSON.stringify(url)}`,
+  ];
+}
+
+/**
+ * 作用：
  * 激活 Chrome，并把前台标签页导航到目标网址。
  *
  * 为什么这样写：
@@ -346,36 +373,7 @@ async function clickChromeScreenPoint(screenPoint, url) {
  * - 如果用户要保留当前前台标签页，建议专门开一个 Chrome 窗口给本工具使用。
  */
 async function prepareChromeTab(url) {
-  const targetHost = buildChromeTabMatchHost(url);
-
-  await runAppleScript([
-    'tell application "Google Chrome" to activate',
-    'tell application "Google Chrome" to if (count of windows) = 0 then make new window',
-    'tell application "Google Chrome"',
-    'set targetWindowIndex to 0',
-    'set targetTabIndex to 0',
-    'repeat with wi from 1 to count of windows',
-    'repeat with ti from 1 to count of tabs of window wi',
-    `if (URL of tab ti of window wi contains ${JSON.stringify(targetHost)}) then`,
-    'set targetWindowIndex to wi',
-    'set targetTabIndex to ti',
-    'exit repeat',
-    'end if',
-    'end repeat',
-    'if targetTabIndex is not 0 then exit repeat',
-    'end repeat',
-    'if targetTabIndex is 0 then',
-    'make new tab at end of tabs of front window',
-    'set targetWindowIndex to 1',
-    'set targetTabIndex to active tab index of front window',
-    `set URL of active tab of front window to ${JSON.stringify(url)}`,
-    'else',
-    'set index of window targetWindowIndex to 1',
-    'set active tab index of front window to targetTabIndex',
-    `set URL of active tab of front window to ${JSON.stringify(url)}`,
-    'end if',
-    'end tell',
-  ]);
+  await runAppleScript(buildPrepareChromeTabAppleScript(url));
 }
 
 /**
@@ -405,7 +403,7 @@ async function executeJavaScriptInActiveTab(source, url) {
     'set targetTabIndex to 0',
     'repeat with wi from 1 to count of windows',
     'repeat with ti from 1 to count of tabs of window wi',
-    `if (URL of tab ti of window wi contains ${JSON.stringify(targetHost)}) then`,
+    `if ((URL of tab ti of window wi) contains ${JSON.stringify(targetHost)}) then`,
     'set targetWindowIndex to wi',
     'set targetTabIndex to ti',
     'exit repeat',
@@ -422,6 +420,7 @@ async function executeJavaScriptInActiveTab(source, url) {
 }
 
 module.exports = {
+  buildPrepareChromeTabAppleScript,
   buildChromeTabMatchHost,
   buildMouseClickJxaSource,
   clickChromeScreenPoint,

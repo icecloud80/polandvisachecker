@@ -6,9 +6,10 @@
 - `src/launchd.js`: bundle generator for a 2-hour macOS `launchd` wrapper around the single-run checker
 - `scheduler/`: tracked home for generated `launchd` install files, distinct from ignored runtime `artifacts/`
 - `src/captcha-labeler.js`: lightweight local web server that turns `labels.json` into a one-image-at-a-time labeling UI
-- `src/captcha-suggest.js`: batch OCR suggester that fills `ocrText` for unlabeled captcha entries
+- `src/captcha-suggest.js`: batch local-model suggester that fills `ocrText` for unlabeled captcha entries
 - `src/captcha-training.js`: training export tool that validates confirmed labels and writes a stable train/val/test dataset
-- `src/captcha-train-local.js`: first local trainer that decodes PNG captcha images, builds a prototype classifier, and writes evaluation artifacts
+- `src/captcha-train-local.js`: pure-Node local trainer that decodes PNG captcha images, builds a hybrid classifier, and writes evaluation artifacts
+- `src/captcha-analyze.js`: holdout-oriented analyzer that reads the current model artifacts and prints confusion, position, serif hard-case, symbol, and 5-attempt metrics
 - `src/chrome-bridge.js`: AppleScript bridge that opens Chrome tabs and executes page JavaScript
 - `src/chrome-page.js`: in-page DOM runtime for captcha detection, dropdown selection, and availability reading
 - `src/chrome-utils.js`: shared captcha heuristics, bridge helpers, and snapshot normalization
@@ -26,8 +27,9 @@
    - capture captcha image
    - capture an alternate processed captcha image in the page runtime
    - save image to `artifacts/`
-   - run the local prototype model against the available captcha variants first
-   - submit the lowest-distance local-model guess directly
+   - run the local hybrid model against the available captcha variants first
+   - evaluate distance, segmentation quality, and overall confidence
+   - submit the best local-model guess only when it passes the quality gates
    - if the captcha is rejected, capture the refreshed image and retry automatically
    - fill the captcha input and click `Dalej`
 6. If captcha success returns to the registration home, reopen the fixed Schengen URL.
@@ -44,10 +46,11 @@
 14. If the command is `collect-captcha`, the CLI saves captcha samples and a blank labeling manifest instead of submitting the form.
 15. If the command is `diagnose-refresh`, the CLI runs refresh-only attempts, records before/after evidence, and writes a structured summary for Phase A analysis.
 16. If the command is `captcha:label`, the local labeler selects the latest dataset, opens a tiny browser UI, and saves each `expectedText` update back into `labels.json`.
-17. If the command is `captcha:suggest`, the OCR suggester scans unlabeled entries, writes `ocrText` and confidence metadata into the manifest, and leaves human confirmation to the labeler.
+17. If the command is `captcha:suggest`, the local-model suggester scans unlabeled entries, writes `ocrText` and confidence metadata into the manifest, and leaves human confirmation to the labeler.
 18. If the command is `captcha:prepare-train`, the training exporter validates the manifest, copies images into a training directory, assigns deterministic splits, and writes summary plus JSONL files.
-19. If the command is `captcha:train-local`, the local trainer rebuilds the training directory, decodes PNG captchas, extracts 4 glyph vectors per image, trains a character prototype model from the train split, and writes summary plus per-split prediction reports.
-20. If the command is `schedule:launchd`, the generator writes a shell script, a `.plist`, and an `INSTALL.md` guide into `scheduler/` so macOS can call the single-run `check` every 2 hours.
+19. If the command is `captcha:train-local`, the local trainer rebuilds the training directory, decodes PNG captchas, extracts 4 glyph vectors per image, trains a hybrid character model from the train split, and writes summary plus per-split prediction reports.
+20. If the command is `captcha:analyze`, the analyzer reads the latest model artifacts and reprints holdout confusion, serif hard-case, position, symbol, and 5-attempt metrics.
+21. If the command is `schedule:launchd`, the generator writes a shell script, a `.plist`, and an `INSTALL.md` guide into `scheduler/` so macOS can call the single-run `check` every 2 hours.
 
 ## 3. Rule Mapping
 
@@ -114,17 +117,17 @@
 - Rule: manual labeling must be fast enough for hundreds of samples.
   Design: `src/captcha-labeler.js` exposes a one-image-at-a-time browser UI with `Save` and `Save & Next`, backed directly by the existing `labels.json` manifest.
 
-- Rule: OCR defaults should accelerate labeling without pretending to be ground truth.
-  Design: `src/captcha-suggest.js` writes machine guesses into separate `ocrText` and confidence fields, while the labeler pre-fills the input from `ocrText` only when `expectedText` is still empty.
+- Rule: machine defaults should accelerate labeling without pretending to be ground truth.
+  Design: `src/captcha-suggest.js` now loads the current local captcha model, writes its machine guess into separate `ocrText` and confidence fields, and lets the labeler pre-fill the input from `ocrText` only when `expectedText` is still empty.
 
 - Rule: completed labels should be convertible into a model-ready dataset without custom ad hoc scripts.
   Design: `src/captcha-training.js` exports copied images and stable JSONL manifests under `artifacts/captcha-training-current/`, with deterministic 80/10/10 splits and an OCR baseline summary.
 
-- Rule: the first model iteration should run locally without extra ML setup.
-  Design: `src/captcha-train-local.js` uses only Node built-ins plus the exported PNG dataset, then trains a lightweight nearest-prototype classifier instead of depending on Python, NumPy, or Torch.
+- Rule: the next model iterations should still run locally without extra ML setup.
+  Design: `src/captcha-train-local.js` uses only Node built-ins plus the exported PNG dataset, then trains a lightweight hybrid classifier with global prototypes, position-aware exemplars, and position-aware multi-prototypes instead of depending on Python, NumPy, or Torch.
 
 - Rule: live checker should now use the local model only.
-  Design: `src/chrome-cli.js` loads `artifacts/captcha-model-current/model.json`, scores each captcha variant with the prototype model, and submits the best local-model candidate on every attempt without invoking Tesseract.
+  Design: `src/chrome-cli.js` loads `artifacts/captcha-model-current/model.json`, scores each captcha variant with the hybrid model, and only submits the best local-model candidate when distance, segmentation quality, and overall confidence all clear the configured gates.
 
 - Rule: once captcha is solved, selector debugging should not rely on terminal logs alone.
   Design: `src/chrome-cli.js` now writes post-captcha JSON artifacts before and after the dropdown selection step, while `src/chrome-page.js` includes per-field diagnostics for service, location, people count, and date.
@@ -163,14 +166,12 @@
 
 - Capture source:
   use the live image or canvas from the current page, plus a thresholded enlarged variant generated in-page
-- OCR engine:
-  `tesseract.js` in Node
 - OCR cleaning:
   keep only the known captcha alphabet: letters, digits, `@`, `#`, `+`, and `=`
 - Default submit policy:
-  auto-submit only 4-character OCR candidates in `check`; otherwise refresh captcha and retry
+  auto-submit only 4-character local-model candidates that also pass distance, segmentation-quality, and confidence gates in `check`; otherwise refresh captcha and retry
 - Retry behavior:
-  allow up to three captcha attempts before returning the last observed state, and inside each attempt retry OCR on both raw and processed captures
+  allow up to five captcha attempts before returning the last observed state, and inside each attempt score both raw and processed captures with the same hybrid model
 - Collection behavior:
   stay on the captcha page, save the preferred labeling image plus available variants, click refresh, wait for the captcha signature to change, and only then count the next sample
   if the signature is still unchanged after the refresh wait window, skip saving and retry the loop instead of persisting a duplicate sample
@@ -178,13 +179,13 @@
 - Labeling behavior:
   prefer `artifacts/captcha-images-current-labels.json` when it exists, otherwise fall back to the latest `captcha-dataset-*` directory and then the latest `captcha-collection-*` directory; render one image at a time, and save `expectedText` plus `notes` back into `labels.json` after each submission
 - Suggestion behavior:
-  run a strict-whitelist OCR pass and a fallback no-whitelist OCR pass on each unlabeled local image, pick the best candidate as `ocrText`, and keep the final confirmation in the browser UI
+  load `artifacts/captcha-model-current/model.json`, predict each unlabeled local image with the same hybrid local model used by live `check`, write the best model output into `ocrText`, and keep the final confirmation in the browser UI
 - Training-export behavior:
   use the confirmed `expectedText` labels only, reject incomplete data, copy images into a dedicated export directory, and write `all.jsonl`, `train.jsonl`, `val.jsonl`, `test.jsonl`, and `summary.json`
 - Local-training behavior:
-  rebuild the exported training directory, decode 8-bit PNG captcha images locally, convert them to grayscale, compute an Otsu threshold, remove isolated noise, split the text region into 4 glyph windows, vectorize each glyph into a fixed occupancy grid, average train-split glyph vectors per character label into prototypes, then evaluate on train / val / test
+  rebuild the exported training directory, decode 8-bit PNG captcha images locally, convert them to grayscale, compute an Otsu threshold, remove isolated noise, compare projection / equal-width / component-guided segmentation branches, vectorize each glyph with occupancy, projection, transition, scalar, and serif-sensitive edge features, build global prototypes plus position-aware exemplar / multi-prototype indices, then evaluate on train / val / test
 - Checker-side model behavior:
-  score raw and processed captcha variants with the local prototype model, record the per-variant average distance in the attempt log, and submit the lowest-distance local-model guess on each attempt; if the page still rejects it, continue to the next refreshed captcha until the retry limit is reached
+  score raw and processed captcha variants with the local hybrid model, record the per-variant average distance, segmentation quality, and confidence in the attempt log, and submit the best local-model guess only when the quality gates pass; if the page still rejects it, continue to the next refreshed captcha until the retry limit is reached
 - Post-captcha diagnostic behavior:
   enrich each page snapshot with `selectionDiagnostics`, including whether each field was found, what control type was matched, the current visible text, and the currently visible option list; also persist `selectionLabelEvidence` so “labels rendered but controls not ready yet” can be distinguished from a true captcha page; write that snapshot to JSON before and after the selection step
 - Diagnostic behavior:
@@ -209,6 +210,7 @@
 - If selectors fail after captcha, the snapshot reason should remain `selection_step` or `unknown_or_waiting` instead of falsely reporting availability.
 - If OCR is weak and still not 4 characters after retries, the CLI should refresh the captcha instead of submitting an invalid value.
 - If the page ignores a plain DOM click on `Odśwież`, the runtime should fall back to the stronger trigger path so captcha collection and retries keep moving.
+- If Chrome needs a fresh window during collection, the tab-preparation fallback now uses a minimal two-line AppleScript flow: `tell application "Google Chrome" to activate` plus `tell application "Google Chrome" to Get URL ...`; complex tab reuse stays in the earlier page-probing stage so the fallback path remains stable and testable.
 - If the runtime still cannot point at a usable refresh control, the diagnostic record should preserve all matched refresh candidates so selector misses can be analyzed offline.
 - If the runtime still cannot match any refresh candidate, the diagnostic record should preserve the visible actionable controls so Phase A can inspect search texts and hidden-character issues directly from artifacts.
 - If the user wants every-2-hours automation, the project should generate but not auto-install a `launchd` bundle, because writing directly into `~/Library/LaunchAgents` is a system-level choice better left explicit.
@@ -238,7 +240,7 @@
   - labeler dataset selection, progress summary, and entry update behavior
   - OCR suggestion selection and manifest update behavior
   - training split assignment, validation, and OCR baseline summary
-  - PNG decode helpers, thresholding helpers, glyph-boundary selection, and prototype-model classification
+  - PNG decode helpers, thresholding helpers, glyph-boundary selection, hybrid-model classification, and analysis helpers
   - post-captcha artifact writing and selection-diagnostic normalization
   - snapshot normalization
   - launchd label generation, shell/plist generation, and bundle writing
@@ -259,9 +261,9 @@
 - Even with the new fallback, refresh can remain unstable, so Phase A diagnostics are now the primary source of truth before changing OCR or training strategy.
 - The local labeling UI writes the full manifest on every save, so concurrent edits from multiple browser tabs are not currently coordinated.
 - OCR suggestions currently operate on the raw local image only; if suggestion quality remains poor, the next upgrade should add local preprocessed variants before OCR.
-- The first local prototype trainer is intentionally simple; it still loses information when 4-character segmentation drifts or when adjacent symbols touch.
-- The current local trainer uses only one preprocessing path; later iterations should compare multiple preprocessing variants and possibly store top-k predictions instead of only the best guess.
-- The checker-side gate currently uses one coarse average-distance threshold and no OCR fallback, so live performance now depends almost entirely on the local model quality and retry count.
+- The current hybrid trainer still overfits on the 206-image dataset, so its holdout performance does not yet beat the earlier global-prototype baseline.
+- Even with multi-branch segmentation, the current preprocessing path is still single-threshold and may not generalize to all future captchas.
+- The checker-side gate now uses distance, segmentation quality, and overall confidence, but those thresholds still need further live recalibration as the dataset grows toward 400-500 labeled images.
 - Even after captcha succeeds, custom Material dropdown markup may still move or rename wrappers, so `selectionDiagnostics` should be treated as the source of truth before changing selector strategy again.
 - The next-step page can render field labels before the underlying dropdown triggers become detectable, so `selectionLabelEvidence` is now the earliest reliable over-page signal and must remain higher priority than stale captcha URL/path hints.
 - The page can briefly report `captcha_step` after submit even though the captcha input and image are already gone, so refresh logic now needs a final post-submit recheck before it is allowed to touch `Odśwież`.

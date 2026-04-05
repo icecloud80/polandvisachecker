@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  buildPrepareChromeTabAppleScript,
   buildMouseClickJxaSource,
   buildChromeTabMatchHost,
   extractHostFromUrl,
@@ -55,6 +56,35 @@ test("buildChromeTabMatchHost widens e-konsulat subdomains to the site root", ()
     buildChromeTabMatchHost("https://secure.e-konsulat.gov.pl/placowki/126"),
     "e-konsulat.gov.pl"
   );
+});
+
+/**
+ * 作用：
+ * 验证准备 Chrome 标签页的 AppleScript 会退回到最小可用的兜底导航结构。
+ *
+ * 为什么这样写：
+ * 之前那套“手写遍历窗口和标签页”的 AppleScript 在 fallback 分支上真实撞到了语法错误。
+ * 现在把 fallback 收缩成 `activate + Get URL` 后，需要测试锁住这条更稳的结构。
+ *
+ * 输入：
+ * @param {object} 无 - 直接生成 AppleScript 源码。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 这里只验证源码结构，不真正启动 Chrome。
+ * - 复用已有标签页的逻辑不在这里测，而在更高层的页面探测里测。
+ */
+test("buildPrepareChromeTabAppleScript uses a minimal Get URL fallback", () => {
+  const lines = buildPrepareChromeTabAppleScript(
+    "https://secure.e-konsulat.gov.pl/placowki/126/wiza-schengen/wizyty/weryfikacja-obrazkowa"
+  );
+
+  assert.ok(lines.includes('tell application "Google Chrome" to activate'));
+  assert.ok(lines.some((line) => /tell application "Google Chrome" to Get URL/u.test(line)));
+  assert.ok(!lines.some((line) => /URL of tab ti of window wi/u.test(line)));
+  assert.ok(!lines.some((line) => /make new tab at end of tabs/u.test(line)));
 });
 
 /**

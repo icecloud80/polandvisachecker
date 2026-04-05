@@ -14,6 +14,7 @@
     "captcha:suggest": "node src/captcha-suggest.js",
     "captcha:prepare-train": "node src/captcha-training.js",
     "captcha:train-local": "node src/captcha-train-local.js",
+    "captcha:analyze": "node src/captcha-analyze.js",
     "captcha:diagnose-refresh": "node src/chrome-cli.js diagnose-refresh",
     "test": "node --test"
   },
@@ -21,7 +22,6 @@
     "node": ">=22"
   },
   "dependencies": {
-    "dotenv": "^16.6.1",
-    "tesseract.js": "^6.0.1"
+    "dotenv": "^16.6.1"
   }
 }

@@ -87,6 +87,12 @@ function loadChromeCliConfig() {
     localCaptchaModelMaxAverageDistance: Number(
       process.env.LOCAL_CAPTCHA_MODEL_MAX_AVERAGE_DISTANCE || 50
     ),
+    localCaptchaModelMinSegmentationQuality: Number(
+      process.env.LOCAL_CAPTCHA_MODEL_MIN_SEGMENTATION_QUALITY || 0.44
+    ),
+    localCaptchaModelMinConfidence: Number(
+      process.env.LOCAL_CAPTCHA_MODEL_MIN_CONFIDENCE || 0.04
+    ),
     captchaSolveMaxAttempts: Number(process.env.CAPTCHA_SOLVE_MAX_ATTEMPTS || 5),
     captchaCollectCount: Number(process.env.CAPTCHA_COLLECT_COUNT || 20),
     captchaCollectRefreshDelayMs: Number(process.env.CAPTCHA_COLLECT_REFRESH_DELAY_MS || 1200),
@@ -134,8 +140,8 @@ function getLocalCaptchaModel(config) {
  * 判断本地模型预测结果是否足够可信。
  *
  * 为什么这样写：
- * 原型模型总会给出 4 位输出，因此 checker 不能把“有输出”直接等价成“可信”。
- * 这里用训练后观察到的平均距离阈值做第一版门槛，帮助我们在日志里区分“相对更稳”和“明显发散”的预测。
+ * 当前模型几乎总会给出 4 位输出，因此 checker 不能把“有输出”直接等价成“可信”。
+ * 这里把平均距离、整串置信度、分割质量三条门槛放在一起，尽量把明显坏分割和低把握候选直接拦在提交前。
  *
  * 输入：
  * @param {object} attempt - 本地模型预测结果。
@@ -145,15 +151,18 @@ function getLocalCaptchaModel(config) {
  * @returns {boolean} 是否达到优先提交阈值。
  *
  * 注意：
- * - 当前阈值默认 50，来自现有 live 迭代策略，不是严格概率。
- * - 若后续模型结构变化，需要同步重新校准这个阈值。
+ * - 当前阈值不是严格概率，只是基于现有训练集和 live 观察的工程门槛。
+ * - 若后续模型结构变化，需要同步重新校准这三条阈值。
  */
 function isConfidentLocalModelAttempt(attempt, config) {
   return (
     attempt &&
     String(attempt.candidate || "").length === 4 &&
     Number(attempt.averageDistance || Number.POSITIVE_INFINITY) <=
-      Number(config.localCaptchaModelMaxAverageDistance || 50)
+      Number(config.localCaptchaModelMaxAverageDistance || 50) &&
+    Number(attempt.segmentationQuality || 0) >=
+      Number(config.localCaptchaModelMinSegmentationQuality || 0.44) &&
+    Number(attempt.modelConfidence || 0) >= Number(config.localCaptchaModelMinConfidence || 0.04)
   );
 }
 
@@ -174,7 +183,7 @@ function isConfidentLocalModelAttempt(attempt, config) {
  *
  * 注意：
  * - 当前只在模型文件存在时运行。
- * - 单个变体解析失败不会打断整轮识别，而是跳过该来源。
+ * - 单个变体解析失败不会打断整轮识别，而是保留错误信息后继续下一条来源。
  */
 function runLocalCaptchaModelAttempts(config, imageSources) {
   const model = getLocalCaptchaModel(config);
@@ -192,17 +201,30 @@ function runLocalCaptchaModelAttempts(config, imageSources) {
       attempts.push({
         engine: "local-model",
         sourceLabel: source.label,
-        passLabel: "prototype-model",
+        passLabel: "serif-hybrid-model",
         rawText: prediction.text,
         candidate: sanitizeCaptchaText(prediction.text),
-        confidence: Number((100 - prediction.averageDistance).toFixed(6)),
+        confidence: Number(prediction.confidence || 0),
+        modelConfidence: Number(prediction.confidence || 0),
         averageDistance: prediction.averageDistance,
         distances: prediction.distances,
+        topK: prediction.topK,
+        glyphMetrics: prediction.glyphMetrics,
+        segmentation: prediction.segmentation,
+        segmentationQuality:
+          prediction && prediction.segmentation
+            ? Number(prediction.segmentation.segmentationQuality || 0)
+            : 0,
         isLikely: isLikelyCaptchaText(prediction.text),
         isConfident: isConfidentLocalModelAttempt(
           {
             candidate: prediction.text,
             averageDistance: prediction.averageDistance,
+            segmentationQuality:
+              prediction && prediction.segmentation
+                ? Number(prediction.segmentation.segmentationQuality || 0)
+                : 0,
+            modelConfidence: Number(prediction.confidence || 0),
           },
           config
         ),
@@ -215,8 +237,13 @@ function runLocalCaptchaModelAttempts(config, imageSources) {
         rawText: "",
         candidate: "",
         confidence: 0,
+        modelConfidence: 0,
         averageDistance: Number.POSITIVE_INFINITY,
         distances: [],
+        topK: [],
+        glyphMetrics: [],
+        segmentation: null,
+        segmentationQuality: 0,
         isLikely: false,
         isConfident: false,
         error: String(error.message || error),
@@ -233,7 +260,7 @@ function runLocalCaptchaModelAttempts(config, imageSources) {
  *
  * 为什么这样写：
  * 用户已经确认 Tesseract 在当前站点上的正确率太低，因此 live checker 现在只使用本地模型。
- * 这里统一处理“优先哪条本地模型结果”，主流程就只需要拿最终候选值去提交。
+ * 这里统一处理“哪条结果值得提交、哪条结果只值得记录”，主流程就只需要按统一契约决定提交还是刷新。
  *
  * 输入：
  * @param {Array<object>} localModelAttempts - 本地模型尝试结果。
@@ -243,11 +270,12 @@ function runLocalCaptchaModelAttempts(config, imageSources) {
  * @returns {object} 选中的验证码结果对象。
  *
  * 注意：
- * - 当前优先选择平均距离达标的本地模型结果。
- * - 若没有达标结果，仍会返回距离最低的本地模型结果供主流程提交。
+ * - 当前只有同时满足距离、分割质量、整体置信度的结果才允许提交。
+ * - 若没有达标结果，仍会返回最佳候选供日志和 artifact 记录，但主流程应刷新而不是提交。
  */
 function selectBestCaptchaSolverResult(localModelAttempts, config) {
-  const confidentLocalAttempt = (Array.isArray(localModelAttempts) ? localModelAttempts : [])
+  const normalizedAttempts = Array.isArray(localModelAttempts) ? localModelAttempts : [];
+  const confidentLocalAttempt = normalizedAttempts
     .filter((attempt) => attempt && attempt.isConfident)
     .sort(
       (left, right) =>
@@ -258,12 +286,14 @@ function selectBestCaptchaSolverResult(localModelAttempts, config) {
   if (confidentLocalAttempt) {
     return {
       captchaText: confidentLocalAttempt.candidate,
-      attempts: [...localModelAttempts],
+      attempts: [...normalizedAttempts],
       winningAttempt: confidentLocalAttempt,
+      shouldSubmit: true,
+      rejectionReason: "",
     };
   }
 
-  const bestLocalAttempt = (Array.isArray(localModelAttempts) ? localModelAttempts : [])
+  const bestLocalAttempt = normalizedAttempts
     .filter((attempt) => attempt && attempt.candidate)
     .sort(
       (left, right) =>
@@ -273,8 +303,12 @@ function selectBestCaptchaSolverResult(localModelAttempts, config) {
 
   return {
     captchaText: bestLocalAttempt ? bestLocalAttempt.candidate : "",
-    attempts: [...localModelAttempts],
+    attempts: [...normalizedAttempts],
     winningAttempt: bestLocalAttempt || null,
+    shouldSubmit: false,
+    rejectionReason: bestLocalAttempt
+      ? "model_quality_below_threshold"
+      : "no_model_candidate",
   };
 }
 
@@ -319,6 +353,50 @@ function logStep(message) {
  */
 function isChromeTabNotFoundError(error) {
   return /Chrome tab not found/i.test(error && error.message ? error.message : String(error || ""));
+}
+
+/**
+ * 作用：
+ * 判断“复用现有 Chrome 标签页导航”失败后是否应退回到新建标签页路径。
+ *
+ * 为什么这样写：
+ * 现在批量采集更适合优先复用已经存在的签证标签页，减少反复走完整 prepare AppleScript 的次数。
+ * 只有在明确找不到目标标签页时，才应该退回到 `prepareChromeTab()` 这条更重的补救路径。
+ *
+ * 输入：
+ * @param {Error|object|string} error - 导航阶段抛出的异常。
+ *
+ * 输出：
+ * @returns {boolean} 是否应继续走 prepareChromeTab fallback。
+ *
+ * 注意：
+ * - 当前只对白名单错误生效。
+ * - 其他错误应继续向上抛出，避免吞掉真实桥接故障。
+ */
+function shouldPrepareChromeTabAfterNavigationError(error) {
+  return isChromeTabNotFoundError(error);
+}
+
+/**
+ * 作用：
+ * 判断当前快照是否已经足够作为新一轮采集的起点。
+ *
+ * 为什么这样写：
+ * 连续采集多批时，上一批结束后 Chrome 往往还停留在 captcha 页。
+ * 这时没必要每次都重新走一遍“打开/导航 Chrome”的桥接步骤，直接复用当前页会更稳。
+ *
+ * 输入：
+ * @param {object} snapshot - 当前归一化页面快照。
+ *
+ * 输出：
+ * @returns {boolean} 是否可以直接把当前页当作采集起点。
+ *
+ * 注意：
+ * - 这里只接受仍处于 captcha step 的页面。
+ * - 真正的桥接可用性仍需要由调用方先确认。
+ */
+function canReuseExistingCaptchaCollectionSnapshot(snapshot) {
+  return Boolean(snapshot && snapshot.isCaptchaStep === true);
 }
 
 /**
@@ -431,8 +509,23 @@ async function runPageAction(actionSource) {
  * - 导航后保留额外等待，给真实页面和反爬中间层留出稳定时间。
  */
 async function driveChromeToRegistrationEntry(config) {
+  const registrationUrl = buildSchengenRegistrationUrl(config.baseUrl);
+
   logStep("opening Schengen registration");
-  await prepareChromeTab(buildSchengenRegistrationUrl(config.baseUrl));
+
+  try {
+    await executeJavaScriptInActiveTab(
+      `window.location.href = ${JSON.stringify(registrationUrl)}; "navigated";`,
+      config.baseUrl
+    );
+  } catch (error) {
+    if (!shouldPrepareChromeTabAfterNavigationError(error)) {
+      throw error;
+    }
+
+    await prepareChromeTab(registrationUrl);
+  }
+
   await sleep(Math.max(config.chromeStepDelayMs, 9000));
 }
 
@@ -1418,7 +1511,7 @@ async function refreshCaptchaWithFallback(config, previousSignature, options = {
  * @returns {Promise<object>} 最终 OCR 结果对象。
  *
  * 注意：
- * - 本地模型结果不保证正确，但会尽量优先返回平均距离更低的 4 位候选值。
+ * - 本地模型结果不保证正确，但会同时带回质量门槛判断，供主流程决定提交还是刷新。
  * - 当前该入口不再调用 Tesseract。
  */
 async function solveCaptchaFromPageData(config, captchaDataUrl, captchaDataVariants) {
@@ -1729,7 +1822,7 @@ async function readSnapshotAfterCaptchaSubmit(config) {
  *
  * 注意：
  * - 如果页面已经直接出现预约日期，不会再触发验证码提交流程。
- * - 当前策略不会等待人工输入，而是持续提交本地模型结果并重试。
+ * - 当前策略不会等待人工输入，而是按质量门槛决定“提交本地模型结果”还是“直接刷新重试”。
  */
 async function resolveAvailabilityAfterCaptcha(config) {
   let currentSnapshot = await readSnapshotWithCaptchaWait(config);
@@ -1796,8 +1889,10 @@ async function resolveAvailabilityAfterCaptcha(config) {
           (ocrAttempt) =>
             `${ocrAttempt.sourceLabel}/${ocrAttempt.passLabel}="${ocrAttempt.candidate}"(${
               ocrAttempt.engine === "local-model" && Number.isFinite(ocrAttempt.averageDistance)
-                ? `d=${ocrAttempt.averageDistance.toFixed(1)}`
-                : Math.round(ocrAttempt.confidence)
+                ? `d=${ocrAttempt.averageDistance.toFixed(1)},q=${Number(
+                    ocrAttempt.segmentationQuality || 0
+                  ).toFixed(2)},c=${Number(ocrAttempt.modelConfidence || 0).toFixed(2)}`
+                : Math.round(Number(ocrAttempt.confidence || 0) * 100)
             })`
         )
         .join(", ");
@@ -1809,6 +1904,21 @@ async function resolveAvailabilityAfterCaptcha(config) {
       logStep(
         `model guessed captcha "${captchaText}"${captchaImagePath ? ` using ${captchaImagePath}` : ""}`
       );
+    }
+
+    if (solverResult.shouldSubmit !== true) {
+      if (solverResult.winningAttempt && solverResult.winningAttempt.candidate) {
+        logStep(
+          `best captcha candidate "${solverResult.winningAttempt.candidate}" rejected before submit because ${solverResult.rejectionReason}`
+        );
+      } else {
+        logStep(`no captcha candidate passed quality gates because ${solverResult.rejectionReason}`);
+      }
+
+      logStep("refreshing captcha because the local model confidence or segmentation quality is too low");
+      await refreshCaptchaWithFallback(config, currentSnapshot, attempt, "quality_gate");
+      currentSnapshot = await readSnapshotWithCaptchaWait(config);
+      continue;
     }
 
     if (!isLikelyCaptchaText(captchaText)) {
@@ -2141,11 +2251,24 @@ async function runCaptchaCollection(config) {
     refreshRecordPath: "",
     refreshContext: "initial_page_load",
   };
+  let startupSnapshot = null;
 
-  logStep("opening Chrome tab for captcha collection");
-  await driveChromeToRegistrationEntry(config);
-  logStep("verifying Chrome JavaScript bridge");
-  await assertChromeJavaScriptBridgeReady(config.baseUrl);
+  try {
+    logStep("checking whether the current Chrome tab can be reused for captcha collection");
+    await assertChromeJavaScriptBridgeReady(config.baseUrl);
+    startupSnapshot = await readSnapshotWithCaptchaWait(config);
+  } catch (error) {
+    logStep("could not reuse the current Chrome captcha tab, falling back to the standard open-and-navigate path");
+  }
+
+  if (canReuseExistingCaptchaCollectionSnapshot(startupSnapshot)) {
+    logStep("reusing the current captcha page instead of reopening Chrome navigation");
+  } else {
+    logStep("opening Chrome tab for captcha collection");
+    await driveChromeToRegistrationEntry(config);
+    logStep("verifying Chrome JavaScript bridge");
+    await assertChromeJavaScriptBridgeReady(config.baseUrl);
+  }
 
   for (let loopIndex = 1; loopIndex <= maxLoopCount; loopIndex += 1) {
     if (entries.length >= config.captchaCollectCount) {
@@ -2392,6 +2515,7 @@ module.exports = {
   buildRefreshDiagnosticRunName,
   createCaptchaCollectionRunContext,
   createRefreshDiagnosticRunContext,
+  canReuseExistingCaptchaCollectionSnapshot,
   hasFreshCaptchaSnapshot,
   hasUsableRefreshClickPoint,
   getCaptchaSnapshotSignature,
@@ -2405,6 +2529,7 @@ module.exports = {
   selectBestCaptchaSolverResult,
   hasCaptchaImageEvidence,
   isConfidentLocalModelAttempt,
+  shouldPrepareChromeTabAfterNavigationError,
   promoteSnapshotToPostCaptchaSelection,
   shouldRecheckPostSubmitState,
   waitForCaptchaSignatureChange,
