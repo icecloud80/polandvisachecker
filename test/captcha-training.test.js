@@ -283,8 +283,8 @@ test("parseTrainingArgs reads the dataset override", () => {
     "node",
     "src/captcha-training.js",
     "--dataset",
-    "artifacts/captcha-images-current-labels.json",
+    "data/captcha-images-current-labels.json",
   ]);
 
-  assert.equal(parsed.datasetInput, "artifacts/captcha-images-current-labels.json");
+  assert.equal(parsed.datasetInput, "data/captcha-images-current-labels.json");
 });

@@ -7,6 +7,12 @@ const {
   prepareTrainingDataset,
   parseTrainingArgs,
 } = require("./captcha-training");
+const {
+  getArtifactsDir,
+  getCurrentCaptchaModelDir,
+  getCurrentTrainingDir,
+  getDataDir,
+} = require("./project-paths");
 
 /**
  * 作用：
@@ -2945,6 +2951,35 @@ function parseLocalTrainArgs(argv) {
 
 /**
  * 作用：
+ * 为本地训练入口解析默认使用的主标注清单路径。
+ *
+ * 为什么这样写：
+ * 训练现在应该优先消费 `data/` 中的主标注库。
+ * 但为了兼容尚未完全迁移的工作区，这里仍保留对旧 `artifacts/` 清单的最后兜底。
+ *
+ * 输入：
+ * @param {string} dataDir - data 根目录。
+ * @param {string} artifactsDir - artifacts 根目录。
+ *
+ * 输出：
+ * @returns {string} 默认标注清单路径。
+ *
+ * 注意：
+ * - 优先级是 `data` 主清单优先，`artifacts` 旧清单兜底。
+ * - 这里只返回路径，不校验标签内容是否可训练。
+ */
+function resolvePreferredTrainingManifestPath(dataDir, artifactsDir) {
+  const dataManifestPath = path.join(path.resolve(dataDir), "captcha-images-current-labels.json");
+
+  if (fs.existsSync(dataManifestPath)) {
+    return dataManifestPath;
+  }
+
+  return path.join(path.resolve(artifactsDir), "captcha-images-current-labels.json");
+}
+
+/**
+ * 作用：
  * 运行第一版本地训练命令。
  *
  * 为什么这样写：
@@ -2958,22 +2993,20 @@ function parseLocalTrainArgs(argv) {
  * @returns {void} 无返回值。
  *
  * 注意：
- * - 默认使用 `artifacts/captcha-images-current-labels.json`。
- * - 会重建 `artifacts/captcha-training-current` 和 `artifacts/captcha-model-current`。
+ * - 默认使用 `data/captcha-images-current-labels.json`。
+ * - 会重建 `data/captcha-training-current` 和 `model/captcha-model-current`。
  */
 function main(argv) {
   const options = parseLocalTrainArgs(argv);
-  const artifactsDir = path.resolve(process.cwd(), "artifacts");
+  const dataDir = getDataDir();
+  const artifactsDir = getArtifactsDir();
   const manifestPath =
-    options.datasetInput || path.join(artifactsDir, "captcha-images-current-labels.json");
-  const trainingSummary = prepareTrainingDataset(
-    manifestPath,
-    path.join(artifactsDir, "captcha-training-current")
-  );
-  const trainingDir = path.join(artifactsDir, "captcha-training-current");
+    options.datasetInput || resolvePreferredTrainingManifestPath(dataDir, artifactsDir);
+  const trainingSummary = prepareTrainingDataset(manifestPath, getCurrentTrainingDir());
+  const trainingDir = getCurrentTrainingDir();
   const modelSummary = trainLocalCaptchaModel(
     trainingDir,
-    path.join(artifactsDir, "captcha-model-current"),
+    getCurrentCaptchaModelDir(),
     {
       vectorWidth: options.vectorWidth,
       vectorHeight: options.vectorHeight,

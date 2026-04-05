@@ -597,7 +597,7 @@ test("parseLocalTrainArgs reads dataset and vector-size overrides", () => {
     "node",
     "src/captcha-train-local.js",
     "--dataset",
-    "artifacts/captcha-images-current-labels.json",
+    "data/captcha-images-current-labels.json",
     "--vector-width",
     "20",
     "--vector-height",
@@ -608,7 +608,7 @@ test("parseLocalTrainArgs reads dataset and vector-size overrides", () => {
     "12",
   ]);
 
-  assert.equal(parsed.datasetInput, "artifacts/captcha-images-current-labels.json");
+  assert.equal(parsed.datasetInput, "data/captcha-images-current-labels.json");
   assert.equal(parsed.vectorWidth, 20);
   assert.equal(parsed.vectorHeight, 24);
   assert.equal(parsed.clusterCount, 4);

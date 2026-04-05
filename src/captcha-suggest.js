@@ -12,6 +12,7 @@ const {
   loadLocalCaptchaModel,
   predictCaptchaImagePath,
 } = require("./captcha-train-local");
+const { getArtifactsDir, getCurrentCaptchaModelPath, getDataDir } = require("./project-paths");
 
 /**
  * 作用：
@@ -90,13 +91,10 @@ function selectBestOcrAttempt(attempts) {
  *
  * 注意：
  * - 允许通过 `LOCAL_CAPTCHA_MODEL_PATH` 覆盖默认模型路径。
- * - 默认仍然指向 `artifacts/captcha-model-current/model.json`。
+ * - 默认仍然指向 `model/captcha-model-current/model.json`。
  */
 function getDefaultLocalSuggestionModelPath() {
-  return path.resolve(
-    process.cwd(),
-    process.env.LOCAL_CAPTCHA_MODEL_PATH || "artifacts/captcha-model-current/model.json"
-  );
+  return path.resolve(process.cwd(), process.env.LOCAL_CAPTCHA_MODEL_PATH || getCurrentCaptchaModelPath());
 }
 
 /**
@@ -354,10 +352,11 @@ async function generateOcrSuggestions(manifestPath, modelPath = "") {
  */
 async function main(argv) {
   const options = parseSuggestArgs(argv);
-  const manifestPath = resolveLabelManifestPath(
-    options.datasetInput,
-    path.resolve(process.cwd(), "artifacts")
-  );
+  const dataDir = getDataDir();
+  const artifactsDir = getArtifactsDir();
+  const manifestPath =
+    resolveLabelManifestPath(options.datasetInput, dataDir) ||
+    resolveLabelManifestPath(options.datasetInput, artifactsDir);
 
   if (!manifestPath) {
     throw new Error("No label manifest was found. Pass --dataset or prepare a captcha dataset first.");

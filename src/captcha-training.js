@@ -7,6 +7,7 @@ const {
   readLabelEntries,
   resolveLabelManifestPath,
 } = require("./captcha-labeler");
+const { getArtifactsDir, getCurrentTrainingDir, getDataDir } = require("./project-paths");
 
 /**
  * 作用：
@@ -86,7 +87,7 @@ function isRetryableDirectoryRemovalError(error) {
  * 稳健地清空训练输出目录，并在需要时做短暂重试。
  *
  * 为什么这样写：
- * `captcha:prepare-train` 和 `captcha:train-local` 都会重建 `captcha-training-current`。
+ * `captcha:prepare-train` 和 `captcha:train-local` 都会重建 `data/captcha-training-current`。
  * 真实运行里目录删除偶发会碰到 `ENOTEMPTY`，这里集中处理后，训练流程就不会因为瞬时文件系统状态而失败。
  *
  * 输入：
@@ -458,13 +459,16 @@ function parseTrainingArgs(argv) {
  * @returns {void} 无返回值。
  *
  * 注意：
- * - 默认导出到 `artifacts/captcha-training-current`。
+ * - 默认导出到 `data/captcha-training-current`。
  * - 该命令会清空并重建目标目录。
  */
 function main(argv) {
   const options = parseTrainingArgs(argv);
-  const artifactsDir = path.resolve(process.cwd(), "artifacts");
-  const manifestPath = resolveLabelManifestPath(options.datasetInput, artifactsDir);
+  const dataDir = getDataDir();
+  const artifactsDir = getArtifactsDir();
+  const manifestPath =
+    resolveLabelManifestPath(options.datasetInput, dataDir) ||
+    resolveLabelManifestPath(options.datasetInput, artifactsDir);
 
   if (!manifestPath) {
     throw new Error("No label manifest was found. Pass --dataset or prepare a labeled captcha set first.");
@@ -472,7 +476,7 @@ function main(argv) {
 
   const summary = prepareTrainingDataset(
     manifestPath,
-    path.join(artifactsDir, "captcha-training-current")
+    getCurrentTrainingDir()
   );
 
   console.log(JSON.stringify(summary, null, 2));

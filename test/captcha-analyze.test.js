@@ -25,7 +25,7 @@ const {
  * @returns {void} 无返回值。
  *
  * 注意：
- * - 默认目录仍应指向 `artifacts/captcha-model-current`。
+ * - 默认目录仍应指向 `model/captcha-model-current`。
  * - 这里只验证解析行为，不触发实际训练。
  */
 test("parseAnalyzeArgs reads the model directory override", () => {
@@ -33,10 +33,10 @@ test("parseAnalyzeArgs reads the model directory override", () => {
     "node",
     "src/captcha-analyze.js",
     "--model-dir",
-    "artifacts/captcha-model-v2",
+    "model/captcha-model-v2",
   ]);
 
-  assert.equal(parsed.modelDir, path.resolve(process.cwd(), "artifacts/captcha-model-v2"));
+  assert.equal(parsed.modelDir, path.resolve(process.cwd(), "model/captcha-model-v2"));
 });
 
 /**

@@ -5,6 +5,8 @@
 - `src/chrome-cli.js`: the primary v1 entrypoint for `doctor`, `check`, `debug`, `collect-captcha`, and `diagnose-refresh`
 - `src/launchd.js`: bundle generator for a 2-hour macOS `launchd` wrapper around the single-run checker
 - `scheduler/`: tracked home for generated `launchd` install files, distinct from ignored runtime `artifacts/`
+- `data/`: tracked home for the consolidated captcha image library, label manifest, and training export directory
+- `model/`: tracked home for the current local captcha model and evaluation reports
 - `src/captcha-labeler.js`: lightweight local web server that turns `labels.json` into a one-image-at-a-time labeling UI
 - `src/captcha-suggest.js`: batch local-model suggester that fills `ocrText` for unlabeled captcha entries
 - `src/captcha-training.js`: training export tool that validates confirmed labels and writes a stable train/val/test dataset
@@ -121,13 +123,13 @@
   Design: `src/captcha-suggest.js` now loads the current local captcha model, writes its machine guess into separate `ocrText` and confidence fields, and lets the labeler pre-fill the input from `ocrText` only when `expectedText` is still empty.
 
 - Rule: completed labels should be convertible into a model-ready dataset without custom ad hoc scripts.
-  Design: `src/captcha-training.js` exports copied images and stable JSONL manifests under `artifacts/captcha-training-current/`, with deterministic 80/10/10 splits and an OCR baseline summary.
+  Design: `src/captcha-training.js` exports copied images and stable JSONL manifests under `data/captcha-training-current/`, with deterministic 80/10/10 splits and a machine-suggestion baseline summary.
 
 - Rule: the next model iterations should still run locally without extra ML setup.
   Design: `src/captcha-train-local.js` uses only Node built-ins plus the exported PNG dataset, then trains a lightweight hybrid classifier with global prototypes, position-aware exemplars, and position-aware multi-prototypes instead of depending on Python, NumPy, or Torch.
 
 - Rule: live checker should now use the local model only.
-  Design: `src/chrome-cli.js` loads `artifacts/captcha-model-current/model.json`, scores each captcha variant with the hybrid model, and only submits the best local-model candidate when distance, segmentation quality, and overall confidence all clear the configured gates.
+  Design: `src/chrome-cli.js` loads `model/captcha-model-current/model.json`, scores each captcha variant with the hybrid model, and only submits the best local-model candidate when distance, segmentation quality, and overall confidence all clear the configured gates.
 
 - Rule: once captcha is solved, selector debugging should not rely on terminal logs alone.
   Design: `src/chrome-cli.js` now writes post-captcha JSON artifacts before and after the dropdown selection step, while `src/chrome-page.js` includes per-field diagnostics for service, location, people count, and date.
@@ -177,13 +179,13 @@
   if the signature is still unchanged after the refresh wait window, skip saving and retry the loop instead of persisting a duplicate sample
   each saved sample also records the refresh path that produced it, so later labeling and model evaluation can correlate OCR outcomes with `initial_page_load`, `dom_refresh`, `real_pointer_click`, or reopen flows
 - Labeling behavior:
-  prefer `artifacts/captcha-images-current-labels.json` when it exists, otherwise fall back to the latest `captcha-dataset-*` directory and then the latest `captcha-collection-*` directory; render one image at a time, and save `expectedText` plus `notes` back into `labels.json` after each submission
+  prefer `data/captcha-images-current-labels.json` when it exists, otherwise fall back to the latest available dataset manifest; render one image at a time, and save `expectedText` plus `notes` back into `labels.json` after each submission
 - Suggestion behavior:
-  load `artifacts/captcha-model-current/model.json`, predict each unlabeled local image with the same hybrid local model used by live `check`, write the best model output into `ocrText`, and keep the final confirmation in the browser UI
+  load `model/captcha-model-current/model.json`, predict each unlabeled local image with the same hybrid local model used by live `check`, write the best model output into `ocrText`, and keep the final confirmation in the browser UI
 - Training-export behavior:
   use the confirmed `expectedText` labels only, reject incomplete data, copy images into a dedicated export directory, and write `all.jsonl`, `train.jsonl`, `val.jsonl`, `test.jsonl`, and `summary.json`
 - Training-export resilience:
-  when rebuilding `artifacts/captcha-training-current/`, retry transient directory-removal failures such as `ENOTEMPTY`, `EBUSY`, or `EPERM` before surfacing a hard failure
+  when rebuilding `data/captcha-training-current/`, retry transient directory-removal failures such as `ENOTEMPTY`, `EBUSY`, or `EPERM` before surfacing a hard failure
 - Local-training behavior:
   rebuild the exported training directory, decode 8-bit PNG captcha images locally, convert them to grayscale, compute an Otsu threshold, remove isolated noise, compare projection / equal-width / component-guided segmentation branches, vectorize each glyph with occupancy, projection, transition, scalar, and serif-sensitive edge features, build global prototypes plus position-aware exemplar / multi-prototype indices, then evaluate on train / val / test
 - Checker-side model behavior:

@@ -3,6 +3,7 @@ const http = require("node:http");
 const path = require("node:path");
 const process = require("node:process");
 const { spawn } = require("node:child_process");
+const { getArtifactsDir, getCurrentCaptchaLabelsPath, getDataDir } = require("./project-paths");
 
 /**
  * 作用：
@@ -34,14 +35,14 @@ function extractDatasetTimestamp(directoryName) {
 
 /**
  * 作用：
- * 在 artifacts 目录中找到最新的一批可标注数据目录。
+ * 在指定根目录中找到最新的一批可标注数据目录。
  *
  * 为什么这样写：
  * 用户大多数时候只想“继续标最新的一批”，不想每次手动复制完整路径。
  * 优先选择去重后的 `captcha-dataset-*` 目录，再回退到原始 `captcha-collection-*` 目录，能减少手工选择成本。
  *
  * 输入：
- * @param {string} artifactsDir - artifacts 根目录。
+ * @param {string} rootDirectory - 候选数据根目录。
  *
  * 输出：
  * @returns {string} 最新数据集目录的绝对路径；找不到时返回空字符串。
@@ -50,8 +51,8 @@ function extractDatasetTimestamp(directoryName) {
  * - 当前优先 `captcha-dataset-*`，因为它已经完成去重整理。
  * - 找不到任何候选目录时，调用方应给出明确报错。
  */
-function findLatestDatasetDirectory(artifactsDir) {
-  const rootDir = path.resolve(artifactsDir);
+function findLatestDatasetDirectory(rootDirectory) {
+  const rootDir = path.resolve(rootDirectory);
 
   if (!fs.existsSync(rootDir)) {
     return "";
@@ -99,18 +100,18 @@ function findLatestDatasetDirectory(artifactsDir) {
  * 所以无参数启动标注器时，最自然的预期就是优先打开这份总清单，而不是旧的数据集目录。
  *
  * 输入：
- * @param {string} artifactsDir - artifacts 根目录。
+ * @param {string} dataDir - data 根目录。
  *
  * 输出：
  * @returns {string} 默认应使用的 `labels.json` 绝对路径；找不到时返回空字符串。
  *
  * 注意：
- * - 当前固定优先 `captcha-images-current-labels.json`。
- * - 若当前总清单不存在，才回退到最新数据集目录中的 `labels.json`。
+ * - 当前固定优先 `data/captcha-images-current-labels.json`。
+ * - 若当前总清单不存在，才回退到 data 目录中的最新数据集清单。
  */
-function resolveDefaultLabelManifestPath(artifactsDir) {
-  const rootDir = path.resolve(artifactsDir);
-  const currentManifestPath = path.join(rootDir, "captcha-images-current-labels.json");
+function resolveDefaultLabelManifestPath(dataDir) {
+  const rootDir = path.resolve(dataDir);
+  const currentManifestPath = path.join(rootDir, path.basename(getCurrentCaptchaLabelsPath()));
 
   if (fs.existsSync(currentManifestPath)) {
     return currentManifestPath;
@@ -137,7 +138,7 @@ function resolveDefaultLabelManifestPath(artifactsDir) {
  *
  * 输入：
  * @param {string} datasetInput - 命令行传入的数据集路径或文件路径。
- * @param {string} artifactsDir - artifacts 根目录。
+ * @param {string} rootDir - 默认数据根目录。
  *
  * 输出：
  * @returns {string} `labels.json` 的绝对路径。
@@ -146,14 +147,14 @@ function resolveDefaultLabelManifestPath(artifactsDir) {
  * - 如果传入目录，则默认寻找其中的 `labels.json`。
  * - 如果最终没有找到 manifest，调用方应立即报错而不是延迟到浏览器交互阶段。
  */
-function resolveLabelManifestPath(datasetInput, artifactsDir) {
+function resolveLabelManifestPath(datasetInput, rootDir) {
   const normalizedInput = String(datasetInput || "").trim();
   let candidatePath = "";
 
   if (normalizedInput) {
     candidatePath = path.resolve(process.cwd(), normalizedInput);
   } else {
-    candidatePath = resolveDefaultLabelManifestPath(artifactsDir);
+    candidatePath = resolveDefaultLabelManifestPath(rootDir);
   }
 
   if (!candidatePath) {
@@ -1008,8 +1009,11 @@ function parseLabelerArgs(argv) {
  */
 async function main(argv) {
   const options = parseLabelerArgs(argv);
-  const artifactsDir = path.resolve(process.cwd(), "artifacts");
-  const manifestPath = resolveLabelManifestPath(options.datasetInput, artifactsDir);
+  const dataDir = getDataDir();
+  const artifactsDir = getArtifactsDir();
+  const manifestPath =
+    resolveLabelManifestPath(options.datasetInput, dataDir) ||
+    resolveLabelManifestPath(options.datasetInput, artifactsDir);
 
   if (!manifestPath) {
     throw new Error("No label manifest was found. Pass --dataset or generate a dataset first.");

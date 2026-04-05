@@ -173,7 +173,7 @@ npm test
 ## Notes
 
 - `check` is now fully automated around the local captcha model. The terminal no longer blocks waiting for manual captcha correction.
-- `check` now loads `artifacts/captcha-model-current/model.json` by default and evaluates the best local-model guess on each attempt.
+- `check` now loads `model/captcha-model-current/model.json` by default and evaluates the best local-model guess on each attempt.
 - The captcha alphabet remains restricted to known 4-character symbols, including `@`, `+`, `=`, and `#`.
 - The page runtime exposes both raw and processed captcha captures so the local model can score multiple variants before the next retry.
 - The current local trainer writes a hybrid classifier with:
@@ -210,7 +210,7 @@ It generates:
 
 The shell script runs one `check` per launchd trigger, and the plist uses `StartInterval=7200` so macOS runs it every 2 hours.
 
-`scheduler/` is the project-owned directory for launchd setup files. Runtime screenshots, datasets, model files, and logs still stay under `artifacts/`, which is intentionally ignored by git.
+`scheduler/` is the project-owned directory for launchd setup files. `artifacts/` now stores runtime-only outputs such as logs, live screenshots, and temporary collection batches. The tracked long-lived captcha library lives under `data/`, and the tracked current model lives under `model/`.
 
 ## Post-Captcha Artifacts
 
@@ -239,11 +239,11 @@ The shell script runs one `check` per launchd trigger, and the plist uses `Start
 ## Captcha Labeling UI
 
 - `npm run captcha:label` starts a local web UI for the latest available dataset and attempts to open it in your browser automatically.
-- `npm run captcha:label` now defaults to `artifacts/captcha-images-current-labels.json` when that consolidated current-label file exists.
+- `npm run captcha:label` now defaults to `data/captcha-images-current-labels.json` when that consolidated current-label file exists.
 - `npm run captcha:suggest` now loads the current local captcha model and writes a model-based machine suggestion into `ocrText` for entries whose `expectedText` is still empty, without marking the entry as confirmed.
-- `npm run captcha:prepare-train` validates the finished labels, copies the current captcha images into `artifacts/captcha-training-current/`, writes `train.jsonl` / `val.jsonl` / `test.jsonl`, and emits a training summary with machine-suggestion baseline stats.
-- `npm run captcha:train-local` rebuilds `artifacts/captcha-training-current/`, trains a pure-Node hybrid classifier, and writes the model plus prediction reports into `artifacts/captcha-model-current/`.
-- The training export now retries transient directory-removal failures such as macOS `ENOTEMPTY` before rebuilding `artifacts/captcha-training-current/`.
+- `npm run captcha:prepare-train` validates the finished labels, copies the current captcha images into `data/captcha-training-current/`, writes `train.jsonl` / `val.jsonl` / `test.jsonl`, and emits a training summary with machine-suggestion baseline stats.
+- `npm run captcha:train-local` rebuilds `data/captcha-training-current/`, trains a pure-Node hybrid classifier, and writes the model plus prediction reports into `model/captcha-model-current/`.
+- The training export now retries transient directory-removal failures such as macOS `ENOTEMPTY` before rebuilding `data/captcha-training-current/`.
 - `npm run captcha:analyze` reads the current model artifacts and prints confusion pairs, serif hard-case confusion pairs, per-position accuracy, symbol error rate, and the estimated success rate within 5 fresh captcha attempts.
 - The UI shows one image at a time, lets you type the correct captcha text, and supports `Save` plus `Save & Next`.
 - When an entry has no confirmed `expectedText` yet, the labeler now pre-fills the input with `ocrText` so you only need to confirm or correct it.
@@ -254,7 +254,7 @@ The shell script runs one `check` per launchd trigger, and the plist uses `Start
 ## Training Export
 
 - `npm run captcha:prepare-train` uses the current consolidated label manifest by default.
-- The export directory is `artifacts/captcha-training-current/`.
+- The export directory is `data/captcha-training-current/`.
 - It writes:
   - `images/` with copied captcha files
   - `all.jsonl`
@@ -269,8 +269,8 @@ The shell script runs one `check` per launchd trigger, and the plist uses `Start
 
 ## Local Training
 
-- `npm run captcha:train-local` uses the current consolidated labels by default and automatically refreshes `artifacts/captcha-training-current/` before training.
-- The model output directory is `artifacts/captcha-model-current/`.
+- `npm run captcha:train-local` uses the current consolidated labels by default and automatically refreshes `data/captcha-training-current/` before training.
+- The model output directory is `model/captcha-model-current/`.
 - The current local trainer is a pure-Node hybrid character model:
   - decode PNG captcha images locally
   - grayscale + Otsu threshold
@@ -294,7 +294,7 @@ The shell script runs one `check` per launchd trigger, and the plist uses `Start
 - This already beats the earlier OCR baseline, whose exact-match rate on suggested samples was only `0.1282`.
 - Checker integration currently uses a conservative local-model gate:
   - environment flag: `USE_LOCAL_CAPTCHA_MODEL=true`
-  - default model path: `artifacts/captcha-model-current/model.json`
+  - default model path: `model/captcha-model-current/model.json`
   - default max average distance: `50`
   - default min segmentation quality: `0.44`
   - default min model confidence: `0.04`

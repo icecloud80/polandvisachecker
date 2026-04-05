@@ -1,0 +1,68 @@
+{
+  "runName": "captcha-dataset-1775371792919",
+  "runDir": "/Users/mo.li/Workspace/poland/artifacts/captcha-dataset-1775371792919",
+  "imagesDir": "/Users/mo.li/Workspace/poland/artifacts/captcha-dataset-1775371792919/images",
+  "labelsPath": "/Users/mo.li/Workspace/poland/artifacts/captcha-dataset-1775371792919/labels.json",
+  "totalCandidateFiles": 279,
+  "uniqueImageCount": 424,
+  "duplicateFileCount": 73,
+  "byKind": {
+    "collection_raw": {
+      "files": 242,
+      "uniqueImageCount": 180
+    },
+    "refresh_diagnostic_raw": {
+      "files": 16,
+      "uniqueImageCount": 6
+    },
+    "standalone_check": {
+      "files": 21,
+      "uniqueImageCount": 20
+    }
+  },
+  "previousUniqueImageCount": 206,
+  "newlyImportedImageCount": 164,
+  "importedCollectionRunCount": 11,
+  "importedCollectionRuns": [
+    "captcha-collection-1775386902294",
+    "captcha-collection-1775386977060",
+    "captcha-collection-1775387066689",
+    "captcha-collection-1775387096644",
+    "captcha-collection-1775387260311",
+    "captcha-collection-1775387572018",
+    "captcha-collection-1775387695937",
+    "captcha-collection-1775387856122",
+    "captcha-collection-1775387900167",
+    "captcha-collection-1775387945386",
+    "captcha-collection-1775387999400"
+  ],
+  "lastImportIdRange": {
+    "start": "captcha-0207",
+    "end": "captcha-0370"
+  },
+  "previousUniqueImageCountBeforeArchive": 370,
+  "archivedCollectionRunCount": 23,
+  "archivedRootDebugFileCount": 8,
+  "archiveDir": "/Users/mo.li/Workspace/poland/artifacts/archive",
+  "archivedImportIdRange": {
+    "start": "captcha-0371",
+    "end": "captcha-0376"
+  },
+  "newlyImportedStandaloneCount": 6,
+  "previousUniqueImageCountBeforeLatestImport": 376,
+  "latestImportRunCount": 7,
+  "latestImportRuns": [
+    "captcha-collection-1775389239147",
+    "captcha-collection-1775389276579",
+    "captcha-collection-1775389320154",
+    "captcha-collection-1775389396453",
+    "captcha-collection-1775389407511",
+    "captcha-collection-1775389448232",
+    "captcha-collection-1775389497119"
+  ],
+  "latestImportedImageCount": 48,
+  "latestImportIdRange": {
+    "start": "captcha-0377",
+    "end": "captcha-0424"
+  }
+}

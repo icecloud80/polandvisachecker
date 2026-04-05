@@ -1,0 +1,291 @@
+{
+  "trainingDir": "/Users/mo.li/Workspace/poland/data/captcha-training-current",
+  "outputDir": "/Users/mo.li/Workspace/poland/model/captcha-model-current",
+  "vectorWidth": 18,
+  "vectorHeight": 22,
+  "exemplarLimit": 10,
+  "clusterCount": 3,
+  "trainCaptchaCount": 340,
+  "valCaptchaCount": 42,
+  "testCaptchaCount": 42,
+  "prototypeLabelCount": 52,
+  "prototypeCounts": {
+    "2": 31,
+    "3": 50,
+    "4": 34,
+    "5": 47,
+    "6": 42,
+    "7": 38,
+    "8": 48,
+    "9": 42,
+    "@": 34,
+    "#": 48,
+    "+": 29,
+    "=": 38,
+    "a": 32,
+    "A": 31,
+    "b": 17,
+    "B": 19,
+    "c": 28,
+    "C": 28,
+    "d": 26,
+    "D": 19,
+    "e": 26,
+    "E": 23,
+    "f": 19,
+    "F": 18,
+    "g": 18,
+    "G": 22,
+    "h": 19,
+    "H": 22,
+    "k": 19,
+    "K": 12,
+    "m": 24,
+    "M": 27,
+    "n": 25,
+    "N": 14,
+    "p": 17,
+    "P": 21,
+    "q": 19,
+    "Q": 19,
+    "r": 21,
+    "R": 20,
+    "s": 12,
+    "S": 24,
+    "t": 32,
+    "T": 33,
+    "w": 23,
+    "W": 9,
+    "x": 18,
+    "X": 24,
+    "y": 23,
+    "Y": 25,
+    "z": 24,
+    "Z": 27
+  },
+  "characterCategoryCoverage": {
+    "digits": 332,
+    "uppercase": 437,
+    "lowercase": 442,
+    "symbols": 149
+  },
+  "positionMetrics": [
+    {
+      "position": 0,
+      "total": 84,
+      "correct": 51,
+      "accuracy": 0.6071
+    },
+    {
+      "position": 1,
+      "total": 84,
+      "correct": 47,
+      "accuracy": 0.5595
+    },
+    {
+      "position": 2,
+      "total": 84,
+      "correct": 49,
+      "accuracy": 0.5833
+    },
+    {
+      "position": 3,
+      "total": 84,
+      "correct": 52,
+      "accuracy": 0.619
+    }
+  ],
+  "confusionSummary": [
+    {
+      "pair": "8->3",
+      "count": 3
+    },
+    {
+      "pair": "P->p",
+      "count": 3
+    },
+    {
+      "pair": "s->S",
+      "count": 3
+    },
+    {
+      "pair": "#->7",
+      "count": 3
+    },
+    {
+      "pair": "9->7",
+      "count": 3
+    },
+    {
+      "pair": "q->g",
+      "count": 2
+    },
+    {
+      "pair": "6->+",
+      "count": 2
+    },
+    {
+      "pair": "c->C",
+      "count": 2
+    },
+    {
+      "pair": "W->w",
+      "count": 2
+    },
+    {
+      "pair": "h->b",
+      "count": 2
+    },
+    {
+      "pair": "2->k",
+      "count": 1
+    },
+    {
+      "pair": "a->P",
+      "count": 1
+    },
+    {
+      "pair": "G->6",
+      "count": 1
+    },
+    {
+      "pair": "2->P",
+      "count": 1
+    },
+    {
+      "pair": "P->7",
+      "count": 1
+    },
+    {
+      "pair": "m->E",
+      "count": 1
+    },
+    {
+      "pair": "@->G",
+      "count": 1
+    },
+    {
+      "pair": "@->g",
+      "count": 1
+    },
+    {
+      "pair": "=->r",
+      "count": 1
+    },
+    {
+      "pair": "H->7",
+      "count": 1
+    }
+  ],
+  "serifConfusionSummary": [
+    {
+      "pair": "P->p",
+      "count": 3
+    },
+    {
+      "pair": "s->S",
+      "count": 3
+    },
+    {
+      "pair": "#->7",
+      "count": 3
+    },
+    {
+      "pair": "6->+",
+      "count": 2
+    },
+    {
+      "pair": "c->C",
+      "count": 2
+    },
+    {
+      "pair": "W->w",
+      "count": 2
+    },
+    {
+      "pair": "@->G",
+      "count": 1
+    },
+    {
+      "pair": "@->g",
+      "count": 1
+    },
+    {
+      "pair": "=->r",
+      "count": 1
+    },
+    {
+      "pair": "4->+",
+      "count": 1
+    },
+    {
+      "pair": "x->X",
+      "count": 1
+    },
+    {
+      "pair": "F->+",
+      "count": 1
+    },
+    {
+      "pair": "#->H",
+      "count": 1
+    },
+    {
+      "pair": "E->=",
+      "count": 1
+    },
+    {
+      "pair": "m->+",
+      "count": 1
+    },
+    {
+      "pair": "=->z",
+      "count": 1
+    },
+    {
+      "pair": "=->x",
+      "count": 1
+    },
+    {
+      "pair": "m->=",
+      "count": 1
+    },
+    {
+      "pair": "=->7",
+      "count": 1
+    },
+    {
+      "pair": "@->k",
+      "count": 1
+    }
+  ],
+  "symbolErrorSummary": {
+    "total": 44,
+    "errors": 18,
+    "errorRate": 0.4091
+  },
+  "fiveAttemptSuccessEstimate": {
+    "maxAttempts": 5,
+    "sampleCount": 84,
+    "exactMatchCount": 25,
+    "singleAttemptExactMatchRate": 0.2976,
+    "estimatedSuccessWithinBudget": 0.8291
+  },
+  "metrics": {
+    "train": {
+      "recordCount": 340,
+      "exactMatchRate": 0.8029,
+      "characterAccuracy": 0.9471
+    },
+    "val": {
+      "recordCount": 42,
+      "exactMatchRate": 0.2619,
+      "characterAccuracy": 0.5952
+    },
+    "test": {
+      "recordCount": 42,
+      "exactMatchRate": 0.3333,
+      "characterAccuracy": 0.5893
+    }
+  }
+}

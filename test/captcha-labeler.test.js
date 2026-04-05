@@ -51,7 +51,7 @@ test("extractDatasetTimestamp reads the numeric suffix from dataset names", () =
  * 这条测试锁住优先级，防止工具误打开旧的未整理目录。
  *
  * 输入：
- * @param {object} 无 - 在临时 artifacts 目录中构造多个候选数据集。
+ * @param {object} 无 - 在临时 data 目录中构造多个候选数据集。
  *
  * 输出：
  * @returns {void} 无返回值。
@@ -82,13 +82,13 @@ test("findLatestDatasetDirectory prefers the newest consolidated dataset", () =>
  * 默认目标应该是这份当前总清单，而不是旧的数据集目录。
  *
  * 输入：
- * @param {object} 无 - 在临时 artifacts 目录中构造当前总清单和普通数据集。
+ * @param {object} 无 - 在临时 data 目录中构造当前总清单和普通数据集。
  *
  * 输出：
  * @returns {void} 无返回值。
  *
  * 注意：
- * - 只有当前总清单不存在时才回退到最新数据集。
+ * - 只有 data 当前总清单不存在时才回退到最新数据集。
  * - 这条规则直接影响 `npm run captcha:label` 的默认体验。
  */
 test("resolveDefaultLabelManifestPath prefers the current consolidated label file", () => {
@@ -110,7 +110,7 @@ test("resolveDefaultLabelManifestPath prefers the current consolidated label fil
  *
  * 为什么这样写：
  * 标注器命令的易用性高度依赖参数解析。
- * 这条测试锁住“默认选最新、目录自动找 labels.json、文件路径直接使用”的契约。
+ * 这条测试锁住“默认选当前主清单、目录自动找 labels.json、文件路径直接使用”的契约。
  *
  * 输入：
  * @param {object} 无 - 在临时目录构造示例数据集和 manifest。

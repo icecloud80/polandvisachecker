@@ -179,13 +179,13 @@ test("parseSuggestArgs reads the dataset and model overrides", () => {
     "node",
     "src/captcha-suggest.js",
     "--dataset",
-    "artifacts/captcha-images-current-labels.json",
+    "data/captcha-images-current-labels.json",
     "--model",
-    "artifacts/captcha-model-current/model.json",
+    "model/captcha-model-current/model.json",
   ]);
 
-  assert.equal(parsed.datasetInput, "artifacts/captcha-images-current-labels.json");
-  assert.equal(parsed.modelPath, "artifacts/captcha-model-current/model.json");
+  assert.equal(parsed.datasetInput, "data/captcha-images-current-labels.json");
+  assert.equal(parsed.modelPath, "model/captcha-model-current/model.json");
 });
 
 /**
@@ -205,9 +205,9 @@ test("parseSuggestArgs reads the dataset and model overrides", () => {
  * 注意：
  * - 当前断言只关注尾部相对路径，避免和本机绝对路径耦合。
  */
-test("getDefaultLocalSuggestionModelPath points at the current local model artifact", () => {
+test("getDefaultLocalSuggestionModelPath points at the current tracked local model", () => {
   assert.match(
     getDefaultLocalSuggestionModelPath(),
-    /artifacts[\\/]+captcha-model-current[\\/]+model\.json$/u
+    /model[\\/]+captcha-model-current[\\/]+model\.json$/u
   );
 });

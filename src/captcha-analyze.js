@@ -9,6 +9,7 @@ const {
   buildSerifConfusionSummary,
   buildSymbolErrorSummary,
 } = require("./captcha-train-local");
+const { getCurrentCaptchaModelDir } = require("./project-paths");
 
 /**
  * 作用：
@@ -25,13 +26,13 @@ const {
  * @returns {object} 解析后的分析参数。
  *
  * 注意：
- * - 默认分析 `artifacts/captcha-model-current`。
+ * - 默认分析 `model/captcha-model-current`。
  * - 当前只支持 `--model-dir`。
  */
 function parseAnalyzeArgs(argv) {
   const args = Array.isArray(argv) ? argv.slice(2) : [];
   const options = {
-    modelDir: path.resolve(process.cwd(), "artifacts/captcha-model-current"),
+    modelDir: getCurrentCaptchaModelDir(),
   };
 
   for (let index = 0; index < args.length; index += 1) {

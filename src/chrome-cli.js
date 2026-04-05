@@ -34,6 +34,7 @@ const {
   shouldReopenRegistrationAfterCaptcha,
 } = require("./chrome-utils");
 const { notifyIfNeeded } = require("./notifier");
+const { getArtifactsDir, getCurrentCaptchaModelPath } = require("./project-paths");
 const { inferAvailability } = require("./status");
 const {
   loadLocalCaptchaModel,
@@ -62,10 +63,7 @@ const CHROME_TARGET_URL = "https://secure.e-konsulat.gov.pl/placowki/126";
  * - `check` 模式下验证码会自动尝试提交，不再阻塞等待人工输入。
  */
 function loadChromeCliConfig() {
-  const artifactsDir = path.resolve(
-    process.cwd(),
-    process.env.ARTIFACTS_DIR || "artifacts"
-  );
+  const artifactsDir = getArtifactsDir();
 
   fs.mkdirSync(artifactsDir, { recursive: true });
 
@@ -82,7 +80,7 @@ function loadChromeCliConfig() {
       String(process.env.USE_LOCAL_CAPTCHA_MODEL || "true").toLowerCase() === "true",
     localCaptchaModelPath: path.resolve(
       process.cwd(),
-      process.env.LOCAL_CAPTCHA_MODEL_PATH || "artifacts/captcha-model-current/model.json"
+      process.env.LOCAL_CAPTCHA_MODEL_PATH || getCurrentCaptchaModelPath()
     ),
     localCaptchaModelMaxAverageDistance: Number(
       process.env.LOCAL_CAPTCHA_MODEL_MAX_AVERAGE_DISTANCE || 50
