@@ -1,4 +1,4 @@
-# Poland Visa Checker V1
+# Poland Visa Appointment Checker Bot V1
 
 Single-run macOS CLI for checking whether the Poland Schengen visa page for Los Angeles exposes any selectable appointment dates.
 
