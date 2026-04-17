@@ -357,6 +357,48 @@ function buildPrepareChromeTabAppleScript(url) {
 
 /**
  * 作用：
+ * 生成“按业务主机名定位并关闭目标 Chrome 标签页”的 AppleScript。
+ *
+ * 为什么这样写：
+ * `check` 结束后如果明确没有预约时间，CLI 需要只关闭当前签证页 tab，
+ * 而不是误伤同一窗口里的其他页面。
+ * 继续沿用既有 host 匹配规则，可以让关闭逻辑和执行 JavaScript / 聚焦 tab 的定位方式保持一致。
+ *
+ * 输入：
+ * @param {string} url - 用于锁定 Chrome 标签页的目标网址。
+ *
+ * 输出：
+ * @returns {string[]} AppleScript 逐行源码。
+ *
+ * 注意：
+ * - 找不到目标标签页时会抛出既有的 missing-tab 错误。
+ * - 这里只关闭匹配到的单个标签页，不做整窗关闭。
+ */
+function buildCloseChromeTabAppleScript(url) {
+  const targetHost = buildChromeTabMatchHost(url);
+
+  return [
+    'tell application "Google Chrome"',
+    'set targetWindowIndex to 0',
+    'set targetTabIndex to 0',
+    'repeat with wi from 1 to count of windows',
+    'repeat with ti from 1 to count of tabs of window wi',
+    `if ((URL of tab ti of window wi) contains ${JSON.stringify(targetHost)}) then`,
+    'set targetWindowIndex to wi',
+    'set targetTabIndex to ti',
+    'exit repeat',
+    'end if',
+    'end repeat',
+    'if targetTabIndex is not 0 then exit repeat',
+    'end repeat',
+    'if targetTabIndex is 0 then error "Poland visa Chrome tab not found."',
+    'close tab targetTabIndex of window targetWindowIndex',
+    'end tell',
+  ];
+}
+
+/**
+ * 作用：
  * 激活 Chrome，并把前台标签页导航到目标网址。
  *
  * 为什么这样写：
@@ -374,6 +416,28 @@ function buildPrepareChromeTabAppleScript(url) {
  */
 async function prepareChromeTab(url) {
   await runAppleScript(buildPrepareChromeTabAppleScript(url));
+}
+
+/**
+ * 作用：
+ * 关闭当前业务主机对应的 Chrome 标签页。
+ *
+ * 为什么这样写：
+ * `check` 在确认“没有预约时间”后，应自动收掉这次检查占用的签证 tab，
+ * 这样连续轮询时不会在 Chrome 里越积越多页面。
+ *
+ * 输入：
+ * @param {string} url - 用于锁定 Chrome 标签页的目标网址。
+ *
+ * 输出：
+ * @returns {Promise<void>} 关闭完成后的 Promise。
+ *
+ * 注意：
+ * - 这里只关闭匹配到的一个 tab。
+ * - 关闭失败时由调用方决定是否降级处理。
+ */
+async function closeChromeTab(url) {
+  await runAppleScript(buildCloseChromeTabAppleScript(url));
 }
 
 /**
@@ -420,9 +484,11 @@ async function executeJavaScriptInActiveTab(source, url) {
 }
 
 module.exports = {
+  buildCloseChromeTabAppleScript,
   buildPrepareChromeTabAppleScript,
   buildChromeTabMatchHost,
   buildMouseClickJxaSource,
+  closeChromeTab,
   clickChromeScreenPoint,
   extractHostFromUrl,
   executeJavaScriptInActiveTab,

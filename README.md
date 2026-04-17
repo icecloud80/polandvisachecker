@@ -31,6 +31,7 @@ Single-run macOS CLI for checking whether the Poland Schengen visa appointment f
 - After each captcha submit, also treats the visible next-step field labels themselves as strong post-captcha evidence, even before the dropdown controls finish hydrating
 - If a post-submit snapshot no longer shows any captcha input or captcha image, re-checks page state before trying to refresh captcha again
 - If that re-check still sees no captcha UI, the run now force-promotes the flow to the post-captcha selection step instead of refreshing captcha again
+- If the final result is `没有预约时间`, closes the current e-Konsulat Chrome tab automatically so repeat runs do not keep piling up no-slot tabs
 
 ## What This Version Does Not Do
 
@@ -187,6 +188,7 @@ npm test
 
 17. Prints one final Chinese summary line:
     `有预约时间` or `没有预约时间`
+18. If the result is `没有预约时间`, closes the current e-Konsulat Chrome tab; if dates are available or the run ends in an abnormal state, leaves the tab open for manual inspection
 
 ## Result Reasons
 
@@ -228,6 +230,7 @@ npm test
 - That entry evidence check now also accepts later valid pages such as the registration form, captcha step, selection step, or final no-slot state, so the CLI does not fail when the live site skips an intermediate list page and jumps farther ahead.
 - Before trying the next homepage entry click, the CLI now also prechecks whether the page has already advanced to a downstream valid state, so it will skip stale intermediate clicks instead of failing on a list item that no longer exists.
 - Final “all reserved” detection now also falls back to normalized `bodyTextSample/bodyTextTailSample`, so the Polish result is still recognized even when runtime-level `unavailabilityText` is temporarily empty.
+- When `check` ends with no available dates, the CLI now best-effort closes the matching e-Konsulat Chrome tab, while keeping positive hits and abnormal states open for manual follow-up.
 - The entry flow now starts from the site homepage and replays the English `U -> United States of America -> Los Angeles -> Schengen Visa - Register the form` chain instead of assuming the old fixed captcha URL still works.
 - Positive hits still use macOS desktop notification support when enabled, and the notification copy is now Chinese.
 - Positive hits now also request a macOS notification sound, ring the current terminal bell, and speak a short local alert by default, so foreground repeat-check runs are much harder to miss.

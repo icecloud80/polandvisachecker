@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  buildCloseChromeTabAppleScript,
   buildPrepareChromeTabAppleScript,
   buildMouseClickJxaSource,
   buildChromeTabMatchHost,
@@ -85,6 +86,33 @@ test("buildPrepareChromeTabAppleScript uses a minimal open-location fallback", (
   assert.ok(lines.some((line) => /tell application "Google Chrome" to open location/u.test(line)));
   assert.ok(!lines.some((line) => /URL of tab ti of window wi/u.test(line)));
   assert.ok(!lines.some((line) => /make new tab at end of tabs/u.test(line)));
+});
+
+/**
+ * 作用：
+ * 验证关闭签证标签页的 AppleScript 会先按主机名定位目标 tab，再只关闭该 tab。
+ *
+ * 为什么这样写：
+ * 新需求要求 `check` 在“没有预约时间”时自动关闭当前签证 tab。
+ * 这条测试锁住“只关闭匹配业务主域的标签页”这一桥接契约，避免误关到别的 Chrome 页面。
+ *
+ * 输入：
+ * @param {object} 无 - 直接生成 AppleScript 源码。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 这里只验证源码结构，不真正启动 Chrome。
+ * - 找不到目标标签页时仍应保留既有 missing-tab 错误语义。
+ */
+test("buildCloseChromeTabAppleScript targets the matching visa tab and closes only that tab", () => {
+  const lines = buildCloseChromeTabAppleScript("https://secure.e-konsulat.gov.pl/placowki/126");
+
+  assert.ok(lines.some((line) => /contains "e-konsulat\.gov\.pl"/u.test(line)));
+  assert.ok(lines.includes('if targetTabIndex is 0 then error "Poland visa Chrome tab not found."'));
+  assert.ok(lines.includes('close tab targetTabIndex of window targetWindowIndex'));
+  assert.ok(!lines.some((line) => /open location/u.test(line)));
 });
 
 /**

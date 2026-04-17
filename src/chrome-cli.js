@@ -7,6 +7,7 @@ const { setTimeout: sleep } = require("node:timers/promises");
 const dotenv = require("dotenv");
 
 const {
+  closeChromeTab,
   clickChromeScreenPoint,
   executeJavaScriptInActiveTab,
   getAppleEventsHelpText,
@@ -2044,6 +2045,31 @@ function buildFinalAvailabilityLine(result) {
 
 /**
  * 作用：
+ * 判断单次 `check` 结束后是否应该关闭当前签证 Chrome 标签页。
+ *
+ * 为什么这样写：
+ * 用户希望“没有预约时间”时自动收掉 tab，避免连续运行后 Chrome 堆积大量无号页面。
+ * 把这条规则抽成纯函数后，测试和主流程都能复用同一份业务判定。
+ *
+ * 输入：
+ * @param {object} result - `runChromeCheck` 生成的最终结果对象。
+ *
+ * 输出：
+ * @returns {boolean} 是否应关闭当前签证标签页。
+ *
+ * 注意：
+ * - 当前只在明确 `isAvailable === false` 时关闭。
+ * - 结构缺失或异常状态一律保守保留 tab，方便人工诊断。
+ */
+function shouldCloseChromeTabAfterCheck(result) {
+  const input = result && typeof result === "object" ? result : {};
+  const status = input.status && typeof input.status === "object" ? input.status : {};
+
+  return status.isAvailable === false;
+}
+
+/**
+ * 作用：
  * 读取当前页面快照，并在验证码图片尚未挂到 DOM 时做短暂补偿等待。
  *
  * 为什么这样写：
@@ -2381,6 +2407,17 @@ async function runChromeCheck(config) {
     pageUrl: status.pageUrl,
   }, null, 2));
   console.log(buildFinalAvailabilityLine(result));
+
+  if (shouldCloseChromeTabAfterCheck(result)) {
+    try {
+      logStep("no appointment slots found, closing the current Chrome tab");
+      await closeChromeTab(config.baseUrl);
+    } catch (error) {
+      if (!isChromeTabNotFoundError(error)) {
+        console.error(`Warning: failed to close the Chrome tab: ${error.message}`);
+      }
+    }
+  }
 
   return result;
 }
@@ -2849,6 +2886,7 @@ module.exports = {
   hasCaptchaImageEvidence,
   isConfidentLocalModelAttempt,
   shouldPrepareChromeTabAfterNavigationError,
+  shouldCloseChromeTabAfterCheck,
   promoteSnapshotToPostCaptchaSelection,
   shouldRecheckPostSubmitState,
   waitForCaptchaSignatureChange,

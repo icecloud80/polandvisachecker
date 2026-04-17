@@ -10,6 +10,7 @@ const {
   buildCaptchaSignatureDigest,
   canReuseExistingCaptchaCollectionSnapshot,
   buildFinalAvailabilityLine,
+  shouldCloseChromeTabAfterCheck,
   buildRefreshDiagnosticAttemptPrefix,
   buildRefreshDiagnosticRunName,
   createCaptchaCollectionRunContext,
@@ -145,6 +146,46 @@ test("buildFinalAvailabilityLine returns a concise Chinese availability summary"
     }),
     "没有预约时间"
   );
+});
+
+/**
+ * 作用：
+ * 验证 `check` 结束后只有在明确“没有预约时间”时才关闭当前签证 tab。
+ *
+ * 为什么这样写：
+ * 用户新要求是“跑完 check 没有预约时间就关闭 Tab”，但发现可预约时间或流程异常时仍应保留现场。
+ * 这条测试锁住关闭条件，避免把有号页面或诊断现场也一起关掉。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入示例检查结果。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 当前只对 `isAvailable === false` 返回 true。
+ * - 缺少结构化结果时应保守返回 false。
+ */
+test("shouldCloseChromeTabAfterCheck closes the tab only for no-slot check results", () => {
+  assert.equal(
+    shouldCloseChromeTabAfterCheck({
+      status: {
+        isAvailable: false,
+        reason: "all_dates_reserved",
+      },
+    }),
+    true
+  );
+  assert.equal(
+    shouldCloseChromeTabAfterCheck({
+      status: {
+        isAvailable: true,
+        reason: "date_options_present",
+      },
+    }),
+    false
+  );
+  assert.equal(shouldCloseChromeTabAfterCheck({}), false);
 });
 
 /**

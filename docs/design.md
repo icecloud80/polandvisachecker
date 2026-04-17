@@ -197,6 +197,9 @@
 - Rule: if page-level unavailable extraction still misses, the final result must still converge to the correct no-slot state.
   Design: `src/status.js` now re-checks `bodyTextSample` and `bodyTextTailSample` for the normalized Polish reserved sentence before falling back to `selection_step`.
 
+- Rule: once `check` has conclusively determined there is no appointment time, the current e-Konsulat Chrome tab should be closed automatically.
+  Design: `src/chrome-cli.js` now maps the final inferred result through a dedicated `shouldCloseChromeTabAfterCheck()` guard, and when `isAvailable === false` it calls a best-effort `closeChromeTab()` bridge that locates the matching `e-konsulat.gov.pl` tab by host and closes only that tab; positive hits and abnormal states keep the tab open for manual inspection.
+
 - Rule: the generated schedule files must stay reviewable before installation.
   Design: `src/launchd.js` writes all generated artifacts into `scheduler/` first, including an `INSTALL.md` guide, and leaves the actual copy into `~/Library/LaunchAgents` as an explicit user step.
 
