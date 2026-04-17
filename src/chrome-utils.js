@@ -360,24 +360,26 @@ function isRecoverableMissingValueError(error) {
 
 /**
  * 作用：
- * 生成 Schengen 注册流程的固定入口地址。
+ * 生成 e-Konsulat 英文预约流程的首页入口地址。
  *
  * 为什么这样写：
- * 真实站点上左侧菜单点击在 AppleScript 环境里不稳定，但当前业务路径的注册页 URL 是固定的。
- * 将 URL 拼接规则抽成纯函数后，CLI 可以直接导航过去并保持测试覆盖。
+ * 用户现在要求从 `https://secure.e-konsulat.gov.pl/` 首页开始，
+ * 然后依次切英文、选 U、选美国、选洛杉矶、再进入 Schengen 注册页。
+ * 把首页入口规范化后，CLI 每轮都能从同一个起点重走这条链路。
  *
  * 输入：
- * @param {string} baseUrl - 领馆首页地址。
+ * @param {string} baseUrl - e-Konsulat 首页地址。
  *
  * 输出：
- * @returns {string} Schengen 注册入口地址。
+ * @returns {string} 规范化后的首页入口地址。
  *
  * 注意：
- * - 该规则绑定当前洛杉矶领馆的固定路径。
- * - 若站点后续改路径，需要同步更新这里和相关文档。
+ * - 返回值始终保留末尾 `/`，避免后续相对路径导航的基准变化。
+ * - 当前流程绑定 secure.e-konsulat.gov.pl 的首页入口。
  */
-function buildSchengenRegistrationUrl(baseUrl) {
-  return `${String(baseUrl || "").replace(/\/+$/, "")}/wiza-schengen/wizyty/weryfikacja-obrazkowa`;
+function buildAppointmentStartUrl(baseUrl) {
+  const normalizedBaseUrl = String(baseUrl || "").replace(/\/+$/, "");
+  return `${normalizedBaseUrl}/`;
 }
 
 /**
@@ -595,8 +597,8 @@ function hasPostCaptchaEvidence(status) {
 module.exports = {
   CAPTCHA_ALLOWED_CHARACTERS,
   buildAppleEventsUnavailableMessage,
+  buildAppointmentStartUrl,
   buildCaptchaPromptMessage,
-  buildSchengenRegistrationUrl,
   extractBestCaptchaTextCandidate,
   getMissingValueRetryDelayMs,
   isAppleScriptMissingValue,

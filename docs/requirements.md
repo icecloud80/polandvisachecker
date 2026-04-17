@@ -2,7 +2,7 @@
 
 ## 1. Goal
 
-Build a single-run local tool that checks whether the Polish e-Konsulat Schengen visa flow for Los Angeles exposes any selectable appointment dates.
+Build a single-run local tool that checks whether the Polish e-Konsulat English Schengen visa flow for Los Angeles exposes any selectable appointment dates.
 
 ## 2. User Story
 
@@ -15,7 +15,12 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 ## 3. Functional Requirements
 
 - Open real Google Chrome on macOS.
-- Navigate directly to `https://secure.e-konsulat.gov.pl/placowki/126/wiza-schengen/wizyty/weryfikacja-obrazkowa`.
+- Open `https://secure.e-konsulat.gov.pl/`.
+- Switch the yellow top-bar `Wersja językowa / Language version` dropdown to `English`.
+- Click the `U` country filter.
+- Open `United States of America`.
+- Open `Consulate General of the Republic of Poland in Los Angeles`.
+- Open `Schengen Visa - Register the form`.
 - Detect whether the current page is:
   - captcha step
   - post-captcha selection step
@@ -31,14 +36,14 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Re-run OCR on the same captcha before switching to the alternate processed capture.
 - Automatically submit the OCR guess only when OCR resolves to exactly 4 allowed captcha characters.
 - If OCR still cannot produce 4 characters after raw and processed retries, refresh the captcha and retry automatically.
-- Fill the `Characters from image` field and submit `Dalej`.
-- Select `Rodzaj usługi = Wiza Schengen`.
-- Select `Lokalizacja = Los Angeles`.
-- Select `Chcę zarezerwować termin dla = 1 osob`.
-- Read the `Termin` field after the selections settle.
+- Fill the `Characters from image` field and submit `Next`.
+- Select `Type of service = Schengen Visa`.
+- Select `Location = Los Angeles`.
+- Select `I want to reserve a date for = 1 person`.
+- Read the `Date` field after the selections settle.
 - Persist a post-captcha status artifact before the dropdown selections run.
 - Persist a post-captcha status artifact after the dropdown selections run, including per-field diagnostics and selection action results.
-- Mark the result as available when `Termin` contains at least one real selectable date.
+- Mark the result as available when `Date` contains at least one real selectable date.
 - Mark the result as unavailable when the page shows:
   `Chwilowo wszystkie udostępnione terminy zostały zarezerwowane, prosimy spróbować umówić wizytę w terminie późniejszym`
 - Print compact JSON with `checkedAt`, `isAvailable`, `reason`, `availableDateCount`, `optionTexts`, and `pageUrl`.
@@ -94,7 +99,17 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Captcha dataset collection must not submit forms or leave the captcha page intentionally.
 - Captcha labeling must preserve symbol characters such as `@`, `#`, `+`, and `=` in manual input.
 - Captcha suggestion generation must preserve symbol characters such as `@`, `#`, `+`, and `=` in OCR outputs.
-- The tool must prioritize the fixed Los Angeles Schengen path only.
+- The tool must prioritize the fixed English homepage flow for Los Angeles Schengen only.
+- The tool must still identify the yellow top-bar homepage language dropdown when the visible `Wersja językowa / Language version` text is not directly bound to the underlying DOM control, including the live `mat-select / role="combobox"` implementation.
+- The tool must still follow homepage country / consulate / registration entries when the live Angular list exposes empty `href=""` anchors and relies on click handlers for navigation.
+- The tool must not treat a browser-expanded current-page `element.href` value as a real navigation target when the raw anchor attribute is actually empty.
+- The tool must not invoke native anchor navigation for empty-`href` placeholder links, because those entries should stay on the current document and only fire framework click handlers.
+- The tool must not collapse a matched country / consulate container to the first unrelated link inside that list item or parent list.
+- The tool must confirm the expected next page evidence after each homepage navigation step instead of assuming a fixed sleep means the page has advanced.
+- The tool must treat direct progress to a later valid page as success for an earlier homepage navigation step, including cases where the site skips the consulate list and jumps straight to registration, captcha, selection, or final no-slot/date states.
+- The tool must skip a stale homepage entry click when the page has already advanced to the expected downstream state before that click begins or before the target control can be resolved.
+- The tool must not classify the homepage language dropdown as one of the post-captcha appointment-form dropdowns, and must not enable appointment-form field-order fallback when only that single homepage dropdown is visible.
+- On the English appointment form, the tool must select service and location through the English labels `Type of service` and `Location`, and must prefer the English option text shown on that page.
 - The tool must support both native `select` controls and custom combobox/listbox widgets.
 - Post-captcha diagnostics must preserve per-field evidence for service, location, people count, and date.
 - Post-captcha diagnostics must also preserve whether the next-step field labels are already visible, even if the dropdown controls are not yet selectable.
@@ -110,12 +125,16 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 
 ## 5. Logic
 
-- Start on the fixed Schengen captcha URL.
+- Start on `https://secure.e-konsulat.gov.pl/`.
+- Switch the page language to English through the yellow top-bar language dropdown.
+- Click `U`, then open `United States of America`.
+- Open `Consulate General of the Republic of Poland in Los Angeles`.
+- Open `Schengen Visa - Register the form`.
 - If the page is still at captcha, run OCR against the raw captcha capture first.
 - If the local captcha model has multiple variant predictions for the current captcha image, score them with distance, segmentation quality, and overall confidence before deciding whether to submit or refresh.
 - If the captcha is rejected, capture the refreshed image and retry automatically for up to 5 attempts.
 - If the best current model guess fails the segmentation-quality or confidence gate, refresh the captcha without submitting that guess.
-- If captcha success returns to the registration home, reopen the fixed Schengen URL.
+- If captcha success returns to the registration home, reopen the English homepage flow and enter the registration page again.
 - If the command is `collect-captcha`, stay on the captcha page, save the current captcha image set, refresh, and repeat until the requested sample count is reached.
 - During `collect-captcha`, if refresh does not change the captcha image yet, keep waiting or retry refreshing instead of saving a duplicate sample.
 - During `collect-captcha`, each saved sample must inherit the provenance of the refresh step that produced it, so later labeling can distinguish initial-load images from DOM-refresh or real-click images.
@@ -129,7 +148,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - If the operator runs `scripts/run-check-every-90-seconds.sh`, execute one `npm run check`, then wait just long enough to keep the start-to-start cadence near 90 seconds before repeating.
 - If the operator runs `scripts/run-check-every-2-minutes.sh`, forward immediately to the current 90-second helper so older commands continue to work.
 - Captcha refresh must activate the visible `Odśwież` button with a full mouse-event sequence instead of relying on a plain DOM `click()` only.
-- The page runtime must also try the matched element's nearest actionable ancestor when triggering `Odśwież` or `Dalej`, because the live site may wrap visible text inside nested Material-style button markup.
+- The page runtime must also try the matched element's nearest actionable ancestor when triggering `Odśwież` or `Next`, because the live site may wrap visible text inside nested Material-style button markup.
 - Refresh target discovery must not rely only on native button selectors; it must also inspect visible text matches and their nearest actionable ancestors.
 - Refresh target discovery must tolerate Unicode/diacritic variants and duplicated button text emitted by the live Angular/Material markup.
 - If DOM-triggered refresh still fails, the tool must read the refresh control's screen position and fall back to a real macOS mouse click.
@@ -157,7 +176,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 
 - Use OCR only as a convenience layer for captcha entry.
 - Prefer deterministic DOM evidence over OCR or heuristic guesses.
-- Prefer direct navigation to the known path over menu clicking.
+- Prefer replaying the known English homepage selection chain over assuming a stale deep link.
 - Prefer a real Chrome session over automation-only browsers because anti-bot risk is lower.
 - Treat symbol-bearing captcha strings as first-class valid OCR outputs when they match the expected length.
 - Use collected captcha datasets as the foundation for any future supervised OCR training.
@@ -175,6 +194,11 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Treat the fixed visual order of the four live dropdowns as a valid selector heuristic, because the current `mat-select` markup can expose no usable label text on the trigger or its immediate wrappers.
 - Treat normalized reserved-message matching as a required heuristic, because the live page can visually show the final state while raw DOM text still differs in whitespace or Unicode composition.
 - Treat `bodyTextSample/bodyTextTailSample` as the final no-slot fallback, because the live final page can visually show the result even when the explicit unavailable field was not captured in that exact snapshot.
+- Treat the English homepage selection chain as the source of truth for reaching the captcha page, because the old direct captcha URL is no longer stable enough to assume.
+- Treat the yellow top-bar language dropdown as the source-of-truth target for language switching, because the live homepage can visually show the language label while exposing weak DOM context for generic field-text matching and may render the control as a `mat-select / role="combobox"` instead of a native `select`.
+- Treat homepage entry links as click-capable navigation targets even when their `href` is empty, because the live Angular flow can route correctly from click handlers alone.
+- Treat the smallest matched country / consulate node as stronger evidence than a broad parent container, because live list pages can place many sibling links under the same surrounding DOM block.
+- Treat “next page evidence appeared” as the real completion signal for homepage navigation, because live Angular route changes can lag behind the initial click animation.
 - Treat macOS `launchd` as the simplest recurring wrapper for this project, because the checker already depends on a local Chrome session and Apple Events permissions.
 - Treat the 90-second foreground shell helper as the fastest manual recurrence path, because it lets the operator start repeated checks immediately without installing any system scheduler.
 - Treat positive-hit notifications as high-priority operator alerts, so the default desktop copy should be short, direct, and localized in Chinese.
@@ -190,7 +214,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Prefer exact 4-character OCR candidates over longer noisy strings.
 - Auto-submit OCR output for every attempt, including weak guesses and symbol-bearing guesses.
 - Refresh the captcha instead of submitting when the hybrid model says the current split is too unstable.
-- Detect unavailable state using the exact Polish sentence, with English fallback kept only as compatibility.
+- Detect unavailable state using the exact Polish sentence, with English field labels and navigation text supported throughout the entry and selection flow.
 - For the first local trainer, prefer a deterministic character prototype model over heavier dependencies, because the immediate goal is to validate dataset learnability on the current machine.
 - For recurring runs on macOS, prefer generating a `launchd` bundle over embedding a sleep loop, because the project already needs GUI-friendly local scheduling.
 - For operator-supervised reruns in the active terminal, prefer the dedicated 90-second shell helper over manually pasting a `while true` loop each time.
@@ -200,6 +224,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 
 - Add a one-command installer/uninstaller wrapper around the generated `launchd` bundle after the current manual-copy flow is proven stable.
 - Keep the 90-second foreground helper script as the quick interactive mode while background scheduling continues to live in the separate `launchd` path.
+- Keep the homepage-to-registration navigation chain explicit and test-covered while the site is still evolving, so future DOM changes can be isolated to one entry path.
 - Add polling after the single-run flow is stable enough that an outer scheduler is no longer sufficient.
 - Add structured notification templates for Telegram, Discord, Slack, and ntfy.
 - Improve captcha preprocessing before OCR.
@@ -230,6 +255,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 
 - Keep normal `check` output compact and machine-readable.
 - Keep the 90-second foreground repeat-check shell helper readable enough that the operator can see each cycle start and sleep interval directly in terminal output.
+- Keep the English entry flow readable enough in logs that the operator can tell whether the run stopped at language switch, country choice, consulate choice, or the registration form.
 - Keep `debug` output verbose for troubleshooting.
 - Save captcha images into `artifacts/` so the user can inspect them outside the terminal.
 - Save collected captcha samples into per-run directories so the operator can label them batch by batch.
@@ -291,3 +317,8 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - 2026-04-16: added `scripts/run-check-every-2-minutes.sh`, so the checker can now be repeated in the current terminal every 2 minutes until the operator stops it with `Ctrl-C`.
 - 2026-04-16: strengthened positive-hit local alerts so macOS runs now request a notification sound, ring the current terminal bell, and speak a short reminder instead of relying on a silent banner only.
 - 2026-04-16: changed the foreground repeat-check cadence to 90 seconds by introducing `scripts/run-check-every-90-seconds.sh` and keeping the old 2-minute script name as a compatibility wrapper.
+- 2026-04-16: changed the appointment entry flow to start from `https://secure.e-konsulat.gov.pl/`, switch to English, open `U -> United States of America -> Consulate General of the Republic of Poland in Los Angeles -> Schengen Visa - Register the form`, and then continue with the existing captcha and availability logic.
+- 2026-04-16: hardened the homepage language switch by explicitly targeting the yellow top-bar `Wersja językowa / Language version` dropdown, including the live `mat-select / role="combobox"` implementation for `English / Angielska`, and widened the country / consulate matching to tolerate the live Polish labels when the page has not switched yet.
+- 2026-04-16: hardened the homepage entry navigation again so country / consulate / registration steps now tolerate live Angular `<a href="">` links by falling back to inline click navigation when no concrete href is available.
+- 2026-04-16: tightened homepage country / consulate target resolution so broad container matches now prefer the exact matched row or matched descendant instead of accidentally clicking the first unrelated link in the list.
+- 2026-04-16: hardened homepage navigation again so `United States`, `Los Angeles`, and registration clicks now wait for next-page evidence and can retry once with a real pointer click if the inline Angular click does not visibly advance the route.

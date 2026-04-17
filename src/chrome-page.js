@@ -19,16 +19,24 @@ function getPageRuntimeSource() {
   return `
     window.__POLAND_VISA_RUNTIME__ = window.__POLAND_VISA_RUNTIME__ || (() => {
       const CONFIG = {
-        englishPattern: /^english|angielska$/i,
-        registrationPattern: /schengen.*(registration|zarejestruj)/i,
+        languageFieldPattern: /language version|wersja językowa|wersja jezykowa/i,
+        englishPattern: /^(english|angielska)$/i,
+        countryLetterPattern: /^u$/i,
+        countryPattern: /united states of america|stany zjednoczone ameryki/i,
+        consulatePattern: /consulate general of the republic of poland in los angeles|konsulat generaln.*los angeles/i,
+        registrationPattern: /schengen.*(register the form|registration|register|zarejestruj)/i,
         servicePattern: /schengen visa|wiza schengen/i,
+        englishServicePattern: /schengen visa/i,
         locationPattern: /los angeles/i,
-        peoplePattern: /^1\\s*(people|osob.*)$/i,
+        englishLocationPattern: /los angeles/i,
+        peoplePattern: /^1\\s*(person|people|osob.*)$/i,
         unavailablePattern: /chwilowo wszystkie udostępnione terminy zostały zarezerwowane,\\s*prosimy spróbować umówić wizytę w terminie późniejszym|all available dates have been reserved,\\s*please make an appointment at a later date\\.?/i,
         unavailableNormalizedPattern: /chwilowo wszystkie udostepnione terminy zostaly zarezerwowane, prosimy sprobowac umowic wizyte w terminie pozniejszym|all available dates have been reserved, please make an appointment at a later date\\.?/i,
         imageVerificationPattern: /characters from image|image verification|weryfikacja obrazkowa|znaki z obrazka/i,
         serviceFieldPattern: /rodzaj usługi|rodzaj uslugi|type of service|service/i,
+        englishServiceFieldPattern: /type of service/i,
         locationFieldPattern: /lokalizacja|location/i,
+        englishLocationFieldPattern: /location/i,
         peopleFieldPattern: /chcę zarezerwować termin dla|chce zarezerwowac termin dla|reserve a date for|people|osob/i,
         dateFieldPattern: /\\b(date|data|termin)\\b/i,
         refreshPattern: /^(refresh|odśwież|odswiez)$/i,
@@ -290,6 +298,99 @@ function getPageRuntimeSource() {
         return null;
       }
 
+      /**
+       * 作用：
+       * 为首页国家 / 领馆 / 注册入口解析更宽松的导航目标。
+       *
+       * 为什么这样写：
+       * live 站点的列表页不一定把目标文本直接放在可点击元素本身上，
+       * 也可能放在 li / div / span 容器里，再由内部 a 或按钮承接点击。
+       * 只靠 findClickable() 会漏掉这类“文本在容器、点击在子节点”的入口。
+       *
+       * 输入：
+       * @param {RegExp|string} pattern - 目标文本模式。
+       *
+       * 输出：
+       * @returns {HTMLElement|null} 可用于导航的目标元素；找不到时返回 null。
+       *
+       * 注意：
+       * - 优先复用现有 findClickable() 结果。
+       * - 回退路径会尝试从文本容器里提取可见的 a / button / role=button 子元素。
+       */
+      function findNavigationTarget(pattern) {
+        const directTarget = findClickable(pattern);
+
+        if (directTarget instanceof HTMLElement) {
+          return directTarget;
+        }
+
+        const matcher = toRegExp(pattern);
+        const containerCandidates = Array.from(
+          document.querySelectorAll("a, button, [role='button'], li, div, span, section, article")
+        )
+          .filter((element) => element instanceof HTMLElement && isVisible(element))
+          .filter((element) => elementMatchesPattern(element, matcher))
+          .sort((left, right) => {
+            const leftTextLength = normalizeText(left.textContent || "").length;
+            const rightTextLength = normalizeText(right.textContent || "").length;
+            const leftRect = left.getBoundingClientRect();
+            const rightRect = right.getBoundingClientRect();
+            const leftArea = Math.round(leftRect.width * leftRect.height);
+            const rightArea = Math.round(rightRect.width * rightRect.height);
+
+            if (leftTextLength !== rightTextLength) {
+              return leftTextLength - rightTextLength;
+            }
+
+            if (leftArea !== rightArea) {
+              return leftArea - rightArea;
+            }
+
+            return leftRect.top - rightRect.top || leftRect.left - rightRect.left;
+          });
+
+        for (const container of containerCandidates) {
+          if (isActionableElement(container)) {
+            return container;
+          }
+
+          const descendantTargets = Array.from(
+            container.querySelectorAll(
+              [
+                "a",
+                "button",
+                "input[type='button']",
+                "input[type='submit']",
+                "[role='button']",
+                ".mat-mdc-button-base",
+                ".mat-mdc-icon-button",
+                ".mdc-button",
+                ".mat-button",
+                ".mat-mdc-unelevated-button",
+                ".mat-mdc-outlined-button",
+                ".mat-mdc-raised-button"
+              ].join(", ")
+            )
+          )
+            .filter((element) => element instanceof HTMLElement && isVisible(element))
+            .filter((element) => elementMatchesPattern(element, matcher))
+            .sort((left, right) => {
+              const leftTextLength = normalizeText(left.textContent || "").length;
+              const rightTextLength = normalizeText(right.textContent || "").length;
+
+              return leftTextLength - rightTextLength;
+            });
+
+          const descendantTarget = descendantTargets[0] || null;
+
+          if (descendantTarget instanceof HTMLElement && isVisible(descendantTarget)) {
+            return descendantTarget;
+          }
+        }
+
+        return null;
+      }
+
       function getActionableElements(element) {
         const actionableElements = [];
         const directElement = element instanceof Element ? element : null;
@@ -475,6 +576,35 @@ function getPageRuntimeSource() {
         };
       }
 
+      /**
+       * 作用：
+       * 判断某个锚点是否属于“空 href 占位链接”。
+       *
+       * 为什么这样写：
+       * live Angular 列表里的国家 / 领馆入口经常写成空 href 的 anchor，
+       * 真正跳转依赖框架点击处理器，而不是浏览器原生链接导航。
+       * 如果这类锚点再执行一次原生 click，浏览器就会把当前页重新打开，表现成整页刷新。
+       *
+       * 输入：
+       * @param {Element} element - 当前待判断的 DOM 元素。
+       *
+       * 输出：
+       * @returns {boolean} 当前元素是否属于空 href 占位锚点。
+       *
+       * 注意：
+       * - 这里只拦截空串和井号两种占位 href。
+       * - 带真实 href 的锚点仍允许继续走原生点击。
+       */
+      function isPlaceholderAnchor(element) {
+        if (!(element instanceof HTMLAnchorElement)) {
+          return false;
+        }
+
+        const rawHref = String(element.getAttribute("href") || "").trim();
+
+        return rawHref === "" || rawHref === "#";
+      }
+
       function activateElement(element) {
         const actionableElements = getActionableElements(element);
 
@@ -505,10 +635,229 @@ function getPageRuntimeSource() {
             }
           }
 
-          candidate.click();
+          if (!isPlaceholderAnchor(candidate)) {
+            candidate.click();
+          }
         }
 
         return true;
+      }
+
+      /**
+       * 作用：
+       * 判断当前字段模式是否代表首页右上角的语言选择控件。
+       *
+       * 为什么这样写：
+       * live 页面上的语言下拉经常拿不到稳定的 label / context 关联，
+       * 继续只靠普通字段文本匹配会让脚本明明看见下拉框却仍然报 not_found。
+       * 单独识别语言字段后，就可以启用更保守的版位回退。
+       *
+       * 输入：
+       * @param {RegExp|string} fieldPattern - 业务字段匹配模式。
+       *
+       * 输出：
+       * @returns {boolean} 当前模式是否属于语言下拉。
+       *
+       * 注意：
+       * - 这里只用来决定是否启用语言控件专用回退。
+       * - 不应把普通预约页下拉混进这条分支。
+       */
+      function isLanguageFieldPattern(fieldPattern) {
+        const matcherSource =
+          fieldPattern instanceof RegExp ? String(fieldPattern.source || "") : String(fieldPattern || "");
+
+        return /language|wersja/.test(matcherSource);
+      }
+
+      /**
+       * 作用：
+       * 获取当前页面里可见的首页语言候选控件，并按“更靠上、更靠右”排序。
+       *
+       * 为什么这样写：
+       * 用户给出的 live DOM 已经证明：首页语言控件可能是 mat-select / combobox，
+       * 不是固定的原生 select。
+       * 因此这里把原生 select 和自定义下拉触发器一起纳入候选，再用版位排序收敛到顶部右侧区域。
+       *
+       * 输入：
+       * 无
+       *
+       * 输出：
+       * @returns {Array<HTMLElement>} 按顶栏优先顺序排列的可见语言候选控件。
+       *
+       * 注意：
+       * - 排序优先 top 更小，其次 left 更大，倾向命中右上角控件。
+       * - 返回值既可能是 HTMLSelectElement，也可能是 mat-select / role=combobox 触发器。
+       */
+      function getOrderedVisibleHomepageLanguageTriggers() {
+        return Array.from(
+          document.querySelectorAll(
+            [
+              "select",
+              "[role='combobox']",
+              "[aria-haspopup='listbox']",
+              "[aria-haspopup='true']",
+              ".mat-select",
+              "mat-select",
+              ".mat-mdc-select",
+              ".mdc-select"
+            ].join(", ")
+          )
+        )
+          .filter((element) => element instanceof HTMLElement && isVisible(element))
+          .filter((element, index, list) => list.indexOf(element) === index)
+          .sort((left, right) => {
+            const leftRect = left.getBoundingClientRect();
+            const rightRect = right.getBoundingClientRect();
+
+            if (Math.abs(leftRect.top - rightRect.top) > 6) {
+              return leftRect.top - rightRect.top;
+            }
+
+            return rightRect.left - leftRect.left;
+          });
+      }
+
+      /**
+       * 作用：
+       * 显式定位首页黄色横条里的语言下拉控件。
+       *
+       * 为什么这样写：
+       * 用户现场截图和 live DOM 都已经证明：真正需要操作的是 Wersja językowa 右侧这个下拉，
+       * 而它既可能表现成原生 select，也可能表现成 mat-select / combobox。
+       * 如果继续走通用字段匹配，脚本可能看见下拉却拿不到稳定标签，
+       * 也可能误把别的顶部控件当成目标。
+       * 这里改成专门为首页语言栏做一层识别，把“顶部位置、右侧位置、语言标签上下文、English 选项存在”
+       * 四种证据合在一起评分，尽量只命中这个控件。
+       *
+       * 输入：
+       * 无
+       *
+       * 输出：
+       * @returns {HTMLElement | null} 首页语言下拉触发器；找不到时返回 null。
+       *
+       * 注意：
+       * - 这条逻辑只服务首页语言切换，不应用到预约页业务下拉。
+       * - 若站点未来改掉黄色顶栏布局，需要同步更新这里和相关测试。
+       */
+      function findHomepageLanguageTrigger() {
+        const orderedTriggers = getOrderedVisibleHomepageLanguageTriggers();
+        const scored = orderedTriggers
+          .map((trigger) => {
+            const rect = trigger.getBoundingClientRect();
+            const contextText = getContextText(trigger);
+            const searchTexts = getElementSearchTexts(trigger);
+            const optionTexts =
+              trigger instanceof HTMLSelectElement
+                ? Array.from(trigger.options, (option) => normalizeText(option.textContent || ""))
+                : [];
+            const currentText =
+              trigger instanceof HTMLSelectElement
+                ? normalizeText(
+                    trigger.selectedOptions && trigger.selectedOptions.length > 0
+                      ? trigger.selectedOptions[0].textContent || ""
+                      : trigger.value || ""
+                  )
+                : normalizeText(trigger.textContent || trigger.getAttribute("aria-label") || "");
+            let score = 0;
+
+            if (rect.top <= Math.max(240, window.innerHeight * 0.25)) {
+              score += 4;
+            }
+
+            if (rect.left >= window.innerWidth * 0.6) {
+              score += 4;
+            }
+
+            if (CONFIG.languageFieldPattern.test(contextText)) {
+              score += 10;
+            }
+
+            if (searchTexts.some((text) => CONFIG.languageFieldPattern.test(text))) {
+              score += 6;
+            }
+
+            if (optionTexts.some((text) => CONFIG.englishPattern.test(text))) {
+              score += 8;
+            }
+
+            if (/polska|english|angielska/.test(currentText)) {
+              score += 2;
+            }
+
+            return {
+              trigger,
+              score
+            };
+          })
+          .filter((item) => item.score > 0)
+          .sort((left, right) => right.score - left.score);
+
+        return scored.length ? scored[0].trigger : null;
+      }
+
+      /**
+       * 作用：
+       * 在首页语言下拉中切换到 English。
+       *
+       * 为什么这样写：
+       * 用户现在的真实需求不是“找任意语言字段”，而是“操作截图里那个顶部语言下拉”。
+       * 把这个动作单独封成专用入口后，Node 侧日志就能明确区分：
+       * 是没找到首页语言下拉，还是找到了但没有 English 选项，还是已经成功切换。
+       *
+       * 输入：
+       * 无
+       *
+       * 输出：
+       * @returns {object} 语言切换结果对象。
+       *
+       * 注意：
+       * - 若当前已是 English，也会返回 changed=true，避免把“已经正确”误报成失败。
+       * - 这里复用原生 select 的 option 选择逻辑，但目标控件由首页专用定位器提供。
+       */
+      function switchHomepageLanguageToEnglish() {
+        const languageTrigger = findHomepageLanguageTrigger();
+
+        if (!(languageTrigger instanceof HTMLElement)) {
+          return {
+            changed: false,
+            controlType: "homepage_language_dropdown_not_found"
+          };
+        }
+
+        const currentText =
+          languageTrigger instanceof HTMLSelectElement
+            ? normalizeText(
+                languageTrigger.selectedOptions && languageTrigger.selectedOptions.length > 0
+                  ? languageTrigger.selectedOptions[0].textContent || ""
+                  : languageTrigger.value || ""
+              )
+            : normalizeText(
+                languageTrigger.textContent || languageTrigger.getAttribute("aria-label") || ""
+              );
+
+        if (CONFIG.englishPattern.test(currentText)) {
+          return {
+            changed: true,
+            controlType: "homepage_language_dropdown"
+          };
+        }
+
+        if (languageTrigger instanceof HTMLSelectElement) {
+          languageTrigger.focus();
+          languageTrigger.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+          languageTrigger.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+          languageTrigger.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+          return {
+            changed: selectOptionByText(languageTrigger, CONFIG.englishPattern),
+            controlType: "homepage_language_dropdown"
+          };
+        }
+
+        return {
+          changed: selectCustomOptionByText(languageTrigger, CONFIG.englishPattern),
+          controlType: "homepage_language_dropdown"
+        };
       }
 
       function findBestSelect(fieldPattern, optionPattern) {
@@ -535,7 +884,15 @@ function getPageRuntimeSource() {
           .filter((item) => item.score > 0)
           .sort((left, right) => right.score - left.score);
 
-        return scored.length ? scored[0].select : null;
+        if (scored.length) {
+          return scored[0].select;
+        }
+
+        if (isLanguageFieldPattern(fieldPattern)) {
+          return findHomepageLanguageTrigger();
+        }
+
+        return null;
       }
 
       function findBestCustomSelect(fieldPattern) {
@@ -605,6 +962,8 @@ function getPageRuntimeSource() {
        * - 排序同时考虑 top 和 left，避免并列布局时顺序抖动。
        */
       function getOrderedVisibleChoiceTriggers() {
+        const homepageLanguageTrigger = findHomepageLanguageTrigger();
+
         return Array.from(
           document.querySelectorAll(
             [
@@ -618,6 +977,7 @@ function getPageRuntimeSource() {
           )
         )
           .filter((element) => element instanceof HTMLElement && isVisible(element))
+          .filter((element) => element !== homepageLanguageTrigger)
           .filter((element, index, list) => list.indexOf(element) === index)
           .sort((left, right) => {
             const leftRect = left.getBoundingClientRect();
@@ -693,6 +1053,10 @@ function getPageRuntimeSource() {
       function findCustomSelectByFieldOrder(fieldPattern) {
         const orderedTriggers = getOrderedVisibleChoiceTriggers();
         const fieldIndex = getChoiceFieldOrderIndex(fieldPattern);
+
+        if (orderedTriggers.length < 2) {
+          return null;
+        }
 
         if (fieldIndex < 0 || orderedTriggers.length <= fieldIndex) {
           return null;
@@ -1281,14 +1645,17 @@ function getPageRuntimeSource() {
         collectPatternCandidates,
         collectVisibleActionableElements,
         findClickable,
+        findNavigationTarget,
         findBestSelect,
         findBestCustomSelect,
         getChoiceOptionTextsForField,
         getVisibleChoiceOptions,
         openChoiceTrigger,
+        findHomepageLanguageTrigger,
         selectChoiceByText,
         selectOptionByText,
         selectCustomOptionByText,
+        switchHomepageLanguageToEnglish,
         findInputByField,
         getCaptchaDataUrl,
         getCaptchaDataVariants,
@@ -1356,22 +1723,235 @@ function buildPageExpression(actionSource) {
  *
  * 注意：
  * - 如果页面当前已是英文，应当安全跳过。
- * - 页面改版后，这一步的按钮匹配可能需要微调。
+ * - 这里通过语言下拉选择 English，而不是依赖右上角文字按钮点击。
  */
 function buildSwitchEnglishAction() {
   return `
-    const button = runtime.findClickable(runtime.CONFIG.englishPattern);
+    const selection = runtime.switchHomepageLanguageToEnglish();
+    return {
+      changed: selection.changed,
+      controlType: selection.controlType,
+      step: "switchEnglish"
+    };
+  `;
+}
 
-    if (button) {
+/**
+ * 作用：
+ * 构造点击某个文本按钮或筛选项的页面动作。
+ *
+ * 为什么这样写：
+ * 新入口流程里的 `U` 字母筛选属于页内点击，不是跳转链接也不是下拉框。
+ * 单独参数化后，CLI 可以把这类“留在当前页”的步骤复用成统一动作。
+ *
+ * 输入：
+ * @param {string} patternSource - 目标文本匹配模式源码。
+ * @param {string} stepName - 结果中回显的步骤名。
+ *
+ * 输出：
+ * @returns {string} 页面动作源码。
+ *
+ * 注意：
+ * - 找不到目标时会返回 `changed:false`，由调用方决定是否继续或报错。
+ * - 这里只负责点击，不负责导航等待。
+ */
+function buildActivatePatternAction(patternSource, stepName) {
+  return `
+    const target = runtime.findClickable(${patternSource});
+
+    if (target) {
       return {
-        changed: true,
-        step: "switchEnglish",
-        href: button instanceof HTMLAnchorElement ? button.href : ""
+        changed: runtime.activateElement(target),
+        step: ${JSON.stringify(stepName)},
+        controlType: "clickable"
       };
     }
 
-    return { changed: false, step: "switchEnglish", href: "" };
+    return {
+      changed: false,
+      step: ${JSON.stringify(stepName)},
+      controlType: "not_found"
+    };
   `;
+}
+
+/**
+ * 作用：
+ * 构造按文本打开下一步入口的页面动作。
+ *
+ * 为什么这样写：
+ * 国家、领馆和注册入口这些步骤都会跳到下一页，但 live 站点并不保证 `<a>` 上一定带真实 href。
+ * 有些入口使用真实 URL，有些入口只给空 href 再交给 Angular 点击事件处理。
+ * 因此这里统一返回“要么给出 href，要么已经在页面内触发点击”，让 Node 侧按结果决定后续等待方式。
+ *
+ * 输入：
+ * @param {string} patternSource - 目标文本匹配模式源码。
+ * @param {string} stepName - 结果中回显的步骤名。
+ *
+ * 输出：
+ * @returns {string} 页面动作源码。
+ *
+ * 注意：
+ * - 仅当目标是 `<a>` 且带非空 href 时，才会返回 href。
+ * - 这里必须读取原始 `href` attribute，而不是浏览器展开后的 `element.href`。
+ * - 若 href 为空，会直接触发点击并依赖页面内路由继续前进。
+ */
+function buildResolveHrefByPatternAction(patternSource, stepName) {
+  return `
+    const target = runtime.findNavigationTarget(${patternSource});
+    const rawHref =
+      target instanceof HTMLAnchorElement
+        ? String(target.getAttribute("href") || "").trim()
+        : "";
+    const href =
+      rawHref !== "" && rawHref !== "#"
+        ? String(target.href || "")
+        : "";
+    const clicked = href === "" && target ? runtime.activateElement(target) : false;
+    const clickPoint = target ? runtime.getScreenClickPointForElement(target) : null;
+
+    return {
+      changed: href !== "" || clicked,
+      step: ${JSON.stringify(stepName)},
+      href,
+      clicked,
+      clickPoint,
+      controlType:
+        href !== ""
+          ? "href_navigation"
+          : clicked
+            ? "inline_click_navigation"
+            : "not_found"
+    };
+  `;
+}
+
+/**
+ * 作用：
+ * 构造检查“下一页目标文本是否已经出现”的页面动作。
+ *
+ * 为什么这样写：
+ * 首页国家 / 领馆 / 注册入口这些步骤即使已经触发点击，也不代表页面一定已经稳定完成跳转。
+ * live 站点有时会直接跳过中间页，直接进入更后面的注册页、验证码页，甚至无号结果页。
+ * 因此这里除了主目标文本，还支持额外后续目标和页面阶段原因，避免把“已经前进得更远”误判成失败。
+ *
+ * 输入：
+ * @param {string} patternSource - 主目标文本匹配模式源码。
+ * @param {string} stepName - 结果中回显的步骤名。
+ * @param {string[]} fallbackPatternSources - 可接受的后续目标文本匹配模式源码列表。
+ * @param {string[]} acceptedReasons - 可接受的页面阶段原因列表。
+ *
+ * 输出：
+ * @returns {string} 页面动作源码。
+ *
+ * 注意：
+ * - 这里同时检查导航目标、正文文本和页面阶段，兼容列表页、标题页与直接落到结果页的结构。
+ * - 命中证据只代表“入口步骤已经安全前进”，不代表业务流程已经完成。
+ */
+function buildPatternPresenceAction(
+  patternSource,
+  stepName,
+  fallbackPatternSources = [],
+  acceptedReasons = []
+) {
+  const matcherSources = [patternSource, ...fallbackPatternSources];
+  const acceptedReasonList = Array.isArray(acceptedReasons) ? acceptedReasons : [];
+
+  return `
+    const matchers = [${matcherSources.join(", ")}];
+    const pageText = runtime.normalizeText(document.body ? document.body.innerText : "");
+    const availability = runtime.readAvailability();
+    const matchResults = matchers.map((matcher, index) => {
+      const target = runtime.findNavigationTarget(matcher);
+      const pageTextMatch = matcher.test(pageText);
+
+      return {
+        index,
+        targetFound: Boolean(target),
+        pageTextMatch
+      };
+    });
+    const acceptedReasonList = ${JSON.stringify(acceptedReasonList)};
+    const matchedByPattern = matchResults.some((result) => result.targetFound || result.pageTextMatch);
+    const matchedByReason = acceptedReasonList.includes(String(availability.reason || ""));
+
+    return {
+      matched: matchedByPattern || matchedByReason,
+      step: ${JSON.stringify(stepName)},
+      matchResults,
+      availabilityReason: String(availability.reason || ""),
+      matchedByPattern,
+      matchedByReason,
+      targetFound: matchResults.some((result) => result.targetFound),
+      pageTextMatch: matchResults.some((result) => result.pageTextMatch)
+    };
+  `;
+}
+
+/**
+ * 作用：
+ * 构造打开字母 `U` 国家索引筛选的页面动作。
+ *
+ * 为什么这样写：
+ * 用户要求保留首页上的 `U` 步骤，而不是直接跳到国家链接。
+ * 单独命名后，CLI 日志会更清楚，也更方便针对这一步做测试。
+ *
+ * 输入：
+ * 无
+ *
+ * 输出：
+ * @returns {string} 页面动作源码。
+ *
+ * 注意：
+ * - 这是页内筛选动作，不会返回 href。
+ * - 找不到 `U` 时返回 `changed:false`，由上层决定是否继续。
+ */
+function buildOpenCountryLetterAction() {
+  return buildActivatePatternAction("runtime.CONFIG.countryLetterPattern", "openCountryLetter");
+}
+
+/**
+ * 作用：
+ * 构造解析 “United States of America” 国家入口链接的页面动作。
+ *
+ * 为什么这样写：
+ * 新流程要求从首页国家列表进入美国领馆列表页。
+ * 单独抽成动作后，CLI 可以在拿到 href 后再统一执行导航。
+ *
+ * 输入：
+ * 无
+ *
+ * 输出：
+ * @returns {string} 页面动作源码。
+ *
+ * 注意：
+ * - 匹配文案基于英文页面。
+ * - 找不到目标时会返回空 href。
+ */
+function buildOpenCountryAction() {
+  return buildResolveHrefByPatternAction("runtime.CONFIG.countryPattern", "openCountry");
+}
+
+/**
+ * 作用：
+ * 构造解析洛杉矶领馆入口链接的页面动作。
+ *
+ * 为什么这样写：
+ * 美国页里会列出多个领馆和 outreach 入口。
+ * 这里固定选择 Los Angeles，避免旧版直达 `/placowki/126` 的假设继续散落在 CLI 里。
+ *
+ * 输入：
+ * 无
+ *
+ * 输出：
+ * @returns {string} 页面动作源码。
+ *
+ * 注意：
+ * - 当前业务只支持洛杉矶领馆。
+ * - 若页面文案改名，需要同步更新配置正则和文档。
+ */
+function buildOpenConsulateAction() {
+  return buildResolveHrefByPatternAction("runtime.CONFIG.consulatePattern", "openConsulate");
 }
 
 /**
@@ -1418,19 +1998,7 @@ function buildSelectAction(fieldPatternSource, optionPatternSource, stepName) {
  * - 匹配文案仍基于英文界面。
  */
 function buildOpenRegistrationAction() {
-  return `
-    const link = runtime.findClickable(runtime.CONFIG.registrationPattern);
-
-    if (link) {
-      return {
-        changed: true,
-        step: "openRegistration",
-        href: link instanceof HTMLAnchorElement ? link.href : ""
-      };
-    }
-
-    return { changed: false, step: "openRegistration", href: "" };
-  `;
+  return buildResolveHrefByPatternAction("runtime.CONFIG.registrationPattern", "openRegistration");
 }
 
 /**
@@ -1632,10 +2200,16 @@ function buildRefreshCaptchaClickPointAction() {
 }
 
 module.exports = {
+  buildActivatePatternAction,
+  buildOpenConsulateAction,
+  buildOpenCountryAction,
+  buildOpenCountryLetterAction,
+  buildPatternPresenceAction,
   buildOpenRegistrationAction,
   buildPageExpression,
   buildRefreshCaptchaClickPointAction,
   buildRefreshCaptchaAction,
+  buildResolveHrefByPatternAction,
   buildSelectAction,
   buildSnapshotAction,
   buildSubmitCurrentStepAction,

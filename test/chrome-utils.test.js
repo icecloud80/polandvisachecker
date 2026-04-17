@@ -3,8 +3,8 @@ const assert = require("node:assert/strict");
 
 const {
   buildAppleEventsUnavailableMessage,
+  buildAppointmentStartUrl,
   buildCaptchaPromptMessage,
-  buildSchengenRegistrationUrl,
   extractBestCaptchaTextCandidate,
   getMissingValueRetryDelayMs,
   hasPostCaptchaEvidence,
@@ -236,16 +236,16 @@ test("buildCaptchaPromptMessage includes screenshot path and OCR acceptance hint
  *
  * 注意：
  * - 需要兼容 baseUrl 末尾是否带斜杠。
- * - 当前测试绑定洛杉矶领馆的固定路径。
+ * - 返回值应始终保留末尾 `/`。
  */
-test("buildSchengenRegistrationUrl appends the fixed registration path", () => {
+test("buildAppointmentStartUrl normalizes the e-Konsulat home entry", () => {
   assert.equal(
-    buildSchengenRegistrationUrl("https://secure.e-konsulat.gov.pl/placowki/126"),
-    "https://secure.e-konsulat.gov.pl/placowki/126/wiza-schengen/wizyty/weryfikacja-obrazkowa"
+    buildAppointmentStartUrl("https://secure.e-konsulat.gov.pl"),
+    "https://secure.e-konsulat.gov.pl/"
   );
   assert.equal(
-    buildSchengenRegistrationUrl("https://secure.e-konsulat.gov.pl/placowki/126/"),
-    "https://secure.e-konsulat.gov.pl/placowki/126/wiza-schengen/wizyty/weryfikacja-obrazkowa"
+    buildAppointmentStartUrl("https://secure.e-konsulat.gov.pl/"),
+    "https://secure.e-konsulat.gov.pl/"
   );
 });
 

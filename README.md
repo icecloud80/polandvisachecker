@@ -1,24 +1,29 @@
 # Poland Visa Appointment Checker Bot V1
 
-Single-run macOS CLI for checking whether the Poland Schengen visa page for Los Angeles exposes any selectable appointment dates.
+Single-run macOS CLI for checking whether the Poland Schengen visa appointment flow for Los Angeles exposes any selectable appointment dates.
 
 ## What This Version Does
 
 - Opens real Google Chrome on macOS
-- Navigates directly to:
-  `https://secure.e-konsulat.gov.pl/placowki/126/wiza-schengen/wizyty/weryfikacja-obrazkowa`
+- Opens:
+  `https://secure.e-konsulat.gov.pl/`
+- Switches the yellow top-bar `Wersja językowa / Language version` dropdown to `English`
+- Opens the `U` country list
+- Opens `United States of America`
+- Opens `Consulate General of the Republic of Poland in Los Angeles`
+- Opens `Schengen Visa - Register the form`
 - Uses the local captcha hybrid model directly in `check`
 - Tries both raw and processed captcha captures and submits the best 4-character model candidate automatically
 - Preserves visible captcha symbols such as `@`, `+`, and `=` instead of stripping them out
 - Scores captcha submissions with distance, segmentation quality, and overall confidence gates before submitting
 - Includes a foreground shell helper for running the checker every 90 seconds in the current terminal until you stop it
 - Generates a ready-to-install macOS `launchd` bundle for running the checker every 2 hours
-- Clicks `Dalej`
+- Clicks `Next`
 - Selects:
-  - `Rodzaj usługi = Wiza Schengen`
-  - `Lokalizacja = Los Angeles`
-  - `Chcę zarezerwować termin dla = 1 osob`
-- Detects whether `Termin` has real options or whether the page shows the Polish “all reserved” message
+  - `Type of service = Schengen Visa`
+  - `Location = Los Angeles`
+  - `I want to reserve a date for = 1 person`
+- Detects whether `Date` has real options or whether the page shows the Polish “all reserved” message
 - Saves post-captcha status artifacts so we can inspect exactly which dropdowns were found and what options were visible
 - Fires a stronger local positive-hit alert on macOS with notification sound, terminal bell, and speech so “有号了” is harder to miss
 - After each captcha submit, treats visible post-captcha dropdowns as stronger evidence than the old captcha URL, so the terminal stops waiting once the next page is reached
@@ -153,17 +158,21 @@ npm test
 ## How `check` Works
 
 1. Opens or reuses a Chrome tab on the e-Konsulat site
-2. Navigates directly to the Schengen captcha page
-3. Extracts the captcha image from the page
-4. Saves the captcha image into `artifacts/`
-5. Runs the local captcha model against raw and processed captures
-6. Evaluates the best candidate with distance, segmentation quality, and overall confidence gates
-7. Submits the best 4-character candidate only when it passes those quality gates; otherwise refreshes captcha and retries
-8. If captcha UI disappears after submit, treats that as a post-captcha transition instead of re-entering captcha logic
-9. Selects the three post-captcha dropdowns
-10. Detects either real `Termin` options or the final Polish “all reserved” state
-11. Saves `post-captcha-before-selection` and `post-captcha-after-selection` artifacts
-12. Prints compact JSON like:
+2. Opens the e-Konsulat home page
+3. Switches the page language to `English`
+4. Opens the `U` country index, then enters `United States of America`
+5. Opens `Consulate General of the Republic of Poland in Los Angeles`
+6. Opens `Schengen Visa - Register the form`
+7. Extracts the captcha image from the page
+8. Saves the captcha image into `artifacts/`
+9. Runs the local captcha model against raw and processed captures
+10. Evaluates the best candidate with distance, segmentation quality, and overall confidence gates
+11. Submits the best 4-character candidate only when it passes those quality gates; otherwise refreshes captcha and retries
+12. If captcha UI disappears after submit, treats that as a post-captcha transition instead of re-entering captcha logic
+13. Selects the three post-captcha dropdowns on the English page
+14. Detects either real `Date` options or the final Polish “all reserved” state
+15. Saves `post-captcha-before-selection` and `post-captcha-after-selection` artifacts
+16. Prints compact JSON like:
 
 ```json
 {
@@ -176,12 +185,12 @@ npm test
 }
 ```
 
-13. Prints one final Chinese summary line:
+17. Prints one final Chinese summary line:
     `有预约时间` or `没有预约时间`
 
 ## Result Reasons
 
-- `date_options_present`: `Termin` contains real selectable entries
+- `date_options_present`: `Date` contains real selectable entries
 - `all_dates_reserved`: the page shows the exact Polish “all reserved” message
 - `captcha_step`: the page is still waiting for captcha input
 - `selection_step`: the post-captcha dropdown page is visible but no final date evidence exists yet
@@ -205,10 +214,21 @@ npm test
   - average distance
   - segmentation quality
   - overall model confidence
-- Post-captcha snapshots now include field diagnostics for `Rodzaj usługi`, `Lokalizacja`, `Chcę zarezerwować termin dla`, and `Termin`, including control type, current text, and visible option texts.
+- Post-captcha snapshots now include field diagnostics for both the English and Polish variants of `Type of service` / `Rodzaj usługi`, `Location` / `Lokalizacja`, `I want to reserve a date for` / `Chcę zarezerwować termin dla`, and `Date` / `Termin`.
+- The live post-captcha auto-selection for service and location now explicitly targets the English labels `Type of service` and `Location`, and prefers the English option text shown on the page.
 - Post-captcha snapshots now also include `selectionLabelEvidence`, so the CLI can stop captcha retries as soon as the next-step labels are visible.
 - The post-captcha selector runtime now falls back to the visible vertical order of the four `mat-select` controls when the live page does not expose usable label text around each dropdown.
+- That field-order fallback now explicitly excludes the homepage language dropdown and only activates when at least two appointment-form dropdowns are visible, so the country search page is not misread as the post-captcha selection form.
+- The homepage language switch now explicitly targets the yellow top-bar `Wersja językowa / Language version` dropdown, including the live `mat-select / role="combobox"` variant, so the run can still pick `English` even when generic field matching is unreliable.
+- The homepage country / consulate / registration entry actions now also tolerate live Angular links whose `<a>` tags expose empty `href=""` values and only navigate through click handlers.
+- Those entry actions now read the raw anchor `href` attribute instead of the browser-expanded `element.href`, so empty Angular `href=""` placeholders do not get mistaken for a real current-page URL and trigger a full-page refresh.
+- The page runtime now also suppresses native `.click()` on empty-`href` placeholder anchors, so country and consulate entries can still fire Angular handlers without reopening the current page.
+- Those homepage entry actions now also prefer the smallest matched node or matched descendant, so country lists like `UNITED STATES OF AMERICA (14)` do not accidentally fall through to the first unrelated link in the same container.
+- After clicking `United States`, `Los Angeles`, or the Schengen registration entry, the CLI now waits for the next page evidence to appear before continuing, and can retry once with a real pointer click when an inline Angular click does not visibly advance the page.
+- That entry evidence check now also accepts later valid pages such as the registration form, captcha step, selection step, or final no-slot state, so the CLI does not fail when the live site skips an intermediate list page and jumps farther ahead.
+- Before trying the next homepage entry click, the CLI now also prechecks whether the page has already advanced to a downstream valid state, so it will skip stale intermediate clicks instead of failing on a list item that no longer exists.
 - Final “all reserved” detection now also falls back to normalized `bodyTextSample/bodyTextTailSample`, so the Polish result is still recognized even when runtime-level `unavailabilityText` is temporarily empty.
+- The entry flow now starts from the site homepage and replays the English `U -> United States of America -> Los Angeles -> Schengen Visa - Register the form` chain instead of assuming the old fixed captcha URL still works.
 - Positive hits still use macOS desktop notification support when enabled, and the notification copy is now Chinese.
 - Positive hits now also request a macOS notification sound, ring the current terminal bell, and speak a short local alert by default, so foreground repeat-check runs are much harder to miss.
 - Debug mode is intentionally verbose; normal `check` output is intentionally compact.
@@ -248,7 +268,7 @@ The shell script runs one `check` per launchd trigger, and the plist uses `Start
   - `artifacts/chrome-status-...-post-captcha-after-selection.json`
 - These files include:
   - the normalized page snapshot
-  - field diagnostics for the four key dropdowns
+  - field diagnostics for the four key English/Polish dropdowns
   - selection action results for service / location / people count
   - page text samples and final availability signals
 

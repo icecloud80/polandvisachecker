@@ -17,7 +17,9 @@ const {
   getCaptchaSnapshotSignature,
   hasCaptchaImageEvidence,
   hasFreshCaptchaSnapshot,
+  hasMatchedEntryEvidence,
   hasUsableRefreshClickPoint,
+  hasUsableScreenClickPoint,
   isChromeTabNotFoundError,
   sanitizeFileNamePart,
   saveCaptchaCollectionSample,
@@ -377,6 +379,66 @@ test("hasUsableRefreshClickPoint only accepts refresh targets with numeric coord
   );
   assert.equal(hasUsableRefreshClickPoint({ clickPoint: { x: null, y: 240 } }), false);
   assert.equal(hasUsableRefreshClickPoint({}), false);
+});
+
+/**
+ * 作用：
+ * 验证入口导航动作的 clickPoint 校验与刷新按钮使用同一套数值规则。
+ *
+ * 为什么这样写：
+ * 现在首页国家 / 领馆 / 注册入口在 synthetic click 失败时也会退回到真实鼠标点击。
+ * 这条测试锁住通用坐标校验，避免入口回退拿着空坐标直接交给系统事件层。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入几组示例页面动作结果。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 当前只校验 clickPoint.x 和 clickPoint.y。
+ * - 与 refresh 逻辑一样，数字字符串也应被接受。
+ */
+test("hasUsableScreenClickPoint only accepts entry targets with numeric coordinates", () => {
+  assert.equal(
+    hasUsableScreenClickPoint({
+      clickPoint: { x: 120, y: 240 },
+    }),
+    true
+  );
+  assert.equal(
+    hasUsableScreenClickPoint({
+      clickPoint: { x: "120", y: 240.5 },
+    }),
+    true
+  );
+  assert.equal(hasUsableScreenClickPoint({ clickPoint: { x: null, y: 240 } }), false);
+  assert.equal(hasUsableScreenClickPoint({}), false);
+});
+
+/**
+ * 作用：
+ * 验证入口证据结果只会在 `matched === true` 时被视为已经安全过页。
+ *
+ * 为什么这样写：
+ * 我们现在会在入口步骤执行前和失败后都复查一次“是不是已经到了后续页”。
+ * 这条测试锁住纯判定逻辑，避免把半成品结果或空对象误当成已完成，从而错误跳过真实点击。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入几组示例证据结果。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 这里只认布尔真值 `matched === true`。
+ * - 缺少字段时必须保守返回 false。
+ */
+test("hasMatchedEntryEvidence only accepts explicitly matched entry evidence", () => {
+  assert.equal(hasMatchedEntryEvidence({ matched: true }), true);
+  assert.equal(hasMatchedEntryEvidence({ matched: false }), false);
+  assert.equal(hasMatchedEntryEvidence({ availabilityReason: "selection_step" }), false);
+  assert.equal(hasMatchedEntryEvidence({}), false);
 });
 
 /**

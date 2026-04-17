@@ -13,17 +13,23 @@ const {
   prepareChromeTab,
 } = require("./chrome-bridge");
 const {
+  buildOpenConsulateAction,
+  buildOpenCountryAction,
+  buildOpenCountryLetterAction,
   buildPageExpression,
+  buildPatternPresenceAction,
+  buildOpenRegistrationAction,
   buildRefreshCaptchaClickPointAction,
   buildRefreshCaptchaAction,
   buildSelectAction,
   buildSnapshotAction,
   buildSubmitCurrentStepAction,
   buildSubmitWithCaptchaAction,
+  buildSwitchEnglishAction,
 } = require("./chrome-page");
 const {
   buildAppleEventsUnavailableMessage,
-  buildSchengenRegistrationUrl,
+  buildAppointmentStartUrl,
   getMissingValueRetryDelayMs,
   hasPostCaptchaEvidence,
   isAppleScriptMissingValue,
@@ -43,7 +49,7 @@ const {
 
 dotenv.config();
 
-const CHROME_TARGET_URL = "https://secure.e-konsulat.gov.pl/placowki/126";
+const CHROME_TARGET_URL = "https://secure.e-konsulat.gov.pl/";
 
 /**
  * 作用：
@@ -496,10 +502,237 @@ async function runPageAction(actionSource) {
 
 /**
  * 作用：
+ * 让当前 Chrome 标签页跳转到指定网址，必要时退回到 `prepareChromeTab()`。
+ *
+ * 为什么这样写：
+ * 新流程既有“打开首页”这种显式入口，也有国家/领馆/注册链接这种逐步跳转。
+ * 把页面跳转统一收口后，首页导航、链接跳转和缺失标签页 fallback 都能复用同一条逻辑。
+ *
+ * 输入：
+ * @param {object} config - 运行配置。
+ * @param {string} targetUrl - 目标网址。
+ *
+ * 输出：
+ * @returns {Promise<void>} 页面导航完成后的 Promise。
+ *
+ * 注意：
+ * - 当前只对白名单 missing-tab 错误退回 `prepareChromeTab()`。
+ * - 导航成功后仍需要由调用方补等待，让页面和风控中间层稳定下来。
+ */
+async function navigateChromeToUrl(config, targetUrl) {
+  try {
+    await executeJavaScriptInActiveTab(
+      `window.location.href = ${JSON.stringify(String(targetUrl || ""))}; "navigated";`,
+      config.baseUrl
+    );
+  } catch (error) {
+    if (!shouldPrepareChromeTabAfterNavigationError(error)) {
+      throw error;
+    }
+
+    await prepareChromeTab(targetUrl);
+  }
+}
+
+/**
+ * 作用：
+ * 执行一个“留在当前页”的入口步骤，例如切英文或点击 `U`。
+ *
+ * 为什么这样写：
+ * 新入口流程里既有真正跳页的链接，也有页内状态切换动作。
+ * 把页内动作单独封装后，CLI 可以统一打印日志、等待渲染，并在动作没生效时给出明确提示。
+ *
+ * 输入：
+ * @param {object} config - 运行配置。
+ * @param {string} logLabel - 面向日志的人类可读步骤名。
+ * @param {string} actionSource - 页面动作源码。
+ *
+ * 输出：
+ * @returns {Promise<object>} 页面动作结果。
+ *
+ * 注意：
+ * - 动作失败不会自动重试，由调用方根据业务重要性决定是否继续。
+ * - 这里的等待主要给前端重绘和筛选结果落地留时间。
+ */
+async function runInlineEntryAction(config, logLabel, actionSource) {
+  logStep(logLabel);
+  const result = await runPageAction(actionSource);
+
+  if (!result.changed) {
+    const detail = result.controlType ? ` (${result.controlType})` : "";
+    logStep(`${logLabel} did not change the page${detail}`);
+  }
+
+  await sleep(Math.max(config.chromeStepDelayMs, 2500));
+  return result;
+}
+
+/**
+ * 作用：
+ * 轮询确认某个入口步骤对应的下一页证据是否已经出现。
+ *
+ * 为什么这样写：
+ * live Angular 页面在点击列表项后，经常会先吞掉点击动画，再过一会儿才真正切页。
+ * 如果 CLI 只靠固定 sleep，很容易在下一页尚未稳定时就开始找下一个目标，导致链路误判失败。
+ *
+ * 输入：
+ * @param {object} config - 运行配置。
+ * @param {string} logLabel - 当前等待的人类可读步骤名。
+ * @param {string} evidenceActionSource - 页面证据检测动作源码。
+ *
+ * 输出：
+ * @returns {Promise<boolean>} 是否在轮询窗口内看到了下一页证据。
+ *
+ * 注意：
+ * - 当前轮询窗口只用于入口跳转，不影响验证码后的业务判断。
+ * - 命中证据后立即返回，不再继续等待满时长。
+ */
+async function waitForEntryEvidence(config, logLabel, evidenceActionSource) {
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
+    const result = await runPageAction(evidenceActionSource);
+
+    if (hasMatchedEntryEvidence(result)) {
+      return true;
+    }
+
+    if (attempt < 8) {
+      logStep(`${logLabel} waiting for next page evidence (${attempt}/8)`);
+      await sleep(Math.max(800, Math.round(config.chromeStepDelayMs / 2)));
+    }
+  }
+
+  return false;
+}
+
+/**
+ * 作用：
+ * 判断入口证据动作是否已经确认页面到达了可接受的后续状态。
+ *
+ * 为什么这样写：
+ * 首页国家 / 领馆 / 注册入口之间现在会共享同一套“下一页证据”结构。
+ * 把 `matched === true` 的判定抽成独立纯函数后，步骤开始前预检、失败后的竞态复检、轮询等待都能复用同一套规则。
+ *
+ * 输入：
+ * @param {object} actionResult - 页面证据动作返回值。
+ *
+ * 输出：
+ * @returns {boolean} 当前结果是否说明页面已经到达可接受的后续状态。
+ *
+ * 注意：
+ * - 这里只消费页面动作已归一化的 `matched` 布尔值。
+ * - 空对象或缺少字段时必须保守返回 false。
+ */
+function hasMatchedEntryEvidence(actionResult) {
+  return Boolean(actionResult && actionResult.matched === true);
+}
+
+/**
+ * 作用：
+ * 执行一个“要么用 href 导航，要么直接页内点击”的入口步骤。
+ *
+ * 为什么这样写：
+ * 国家、领馆和注册链接都属于页面跳转动作，但 live 站点有些入口是空 href 的 Angular 链接。
+ * 因此这里既支持“页面先返回 href，再由 Node 侧导航”，也支持“页面内已经触发点击，Node 侧只负责等待结果稳定”。
+ *
+ * 输入：
+ * @param {object} config - 运行配置。
+ * @param {string} logLabel - 面向日志的人类可读步骤名。
+ * @param {string} actionSource - 页面动作源码。
+ * @param {number} minimumWaitMs - 跳转后的最短等待时间。
+ *
+ * 输出：
+ * @returns {Promise<object>} 页面动作结果。
+ *
+ * 注意：
+ * - 当 href 为空但页面内点击已触发时，不会报错。
+ * - 只有 href 和点击都失败时，才会把这一步视为真正失败。
+ */
+async function runHrefEntryNavigation(
+  config,
+  logLabel,
+  actionSource,
+  minimumWaitMs,
+  expectedEvidenceActionSource
+) {
+  if (expectedEvidenceActionSource) {
+    const preflightEvidence = await runPageAction(expectedEvidenceActionSource);
+
+    if (hasMatchedEntryEvidence(preflightEvidence)) {
+      logStep(`${logLabel} skipped because the current page already exposes the expected next page evidence`);
+      return {
+        changed: false,
+        skipped: true,
+        controlType: "already_on_expected_page"
+      };
+    }
+  }
+
+  logStep(logLabel);
+  const result = await runPageAction(actionSource);
+  const href = String(result && result.href ? result.href : "").trim();
+  const clicked = Boolean(result && result.clicked);
+
+  if (!href && !clicked) {
+    if (expectedEvidenceActionSource) {
+      const fallbackEvidence = await runPageAction(expectedEvidenceActionSource);
+
+      if (hasMatchedEntryEvidence(fallbackEvidence)) {
+        logStep(`${logLabel} skipped because the page advanced before the target control could be resolved`);
+        return {
+          ...result,
+          changed: false,
+          skipped: true,
+          controlType: "already_advanced_before_resolution"
+        };
+      }
+    }
+
+    throw new Error(`${logLabel} failed because neither a target href nor an inline click navigation was available.`);
+  }
+
+  if (href) {
+    await navigateChromeToUrl(config, href);
+  }
+
+  await sleep(Math.max(config.chromeStepDelayMs, Number(minimumWaitMs || 4000)));
+
+  if (expectedEvidenceActionSource) {
+    const matchedAfterPrimaryNavigation = await waitForEntryEvidence(
+      config,
+      logLabel,
+      expectedEvidenceActionSource
+    );
+
+    if (matchedAfterPrimaryNavigation) {
+      return result;
+    }
+
+    if (clicked && hasUsableScreenClickPoint(result)) {
+      const x = Math.round(Number(result.clickPoint.x));
+      const y = Math.round(Number(result.clickPoint.y));
+
+      logStep(`${logLabel} did not expose the expected next page, retrying with a real pointer click`);
+      await clickChromeScreenPoint({ x, y }, config.baseUrl);
+      await sleep(Math.max(config.chromeStepDelayMs, Number(minimumWaitMs || 4000)));
+
+      if (await waitForEntryEvidence(config, logLabel, expectedEvidenceActionSource)) {
+        return result;
+      }
+    }
+
+    throw new Error(`${logLabel} did not expose the expected next page evidence.`);
+  }
+
+  return result;
+}
+
+/**
+ * 作用：
  * 引导真实 Chrome 页面走到目标预约表单状态。
  *
  * 为什么这样写：
- * 当前 v1 只支持一个固定入口地址，直接导航可以减少菜单点击不稳定带来的失败率。
+ * 目标站点流程已经从“固定验证码 URL”变成“首页切英文后逐级选择国家、领馆和签证入口”。
+ * 在这里按明确步骤重建入口链路后，后面的验证码和日期判断逻辑可以保持原样复用。
  *
  * 输入：
  * @param {object} config - 运行配置。
@@ -508,28 +741,73 @@ async function runPageAction(actionSource) {
  * @returns {Promise<void>} 页面准备完成后的 Promise。
  *
  * 注意：
- * - 这里不再依赖首页菜单点击。
- * - 导航后保留额外等待，给真实页面和反爬中间层留出稳定时间。
+ * - 当前流程固定为：首页 -> English -> U -> United States of America -> Los Angeles -> Schengen Visa - Register the form。
+ * - 首次打开首页的等待时间比后续步骤更长，因为主页和国家列表页都更容易出现慢加载。
  */
 async function driveChromeToRegistrationEntry(config) {
-  const registrationUrl = buildSchengenRegistrationUrl(config.baseUrl);
+  const startUrl = buildAppointmentStartUrl(config.baseUrl);
 
-  logStep("opening Schengen registration");
-
-  try {
-    await executeJavaScriptInActiveTab(
-      `window.location.href = ${JSON.stringify(registrationUrl)}; "navigated";`,
-      config.baseUrl
-    );
-  } catch (error) {
-    if (!shouldPrepareChromeTabAfterNavigationError(error)) {
-      throw error;
-    }
-
-    await prepareChromeTab(registrationUrl);
-  }
-
+  logStep("opening e-Konsulat home page");
+  await navigateChromeToUrl(config, startUrl);
   await sleep(Math.max(config.chromeStepDelayMs, 9000));
+
+  await runInlineEntryAction(config, "switching language to English", buildSwitchEnglishAction());
+  await runInlineEntryAction(
+    config,
+    "opening the U country list",
+    buildOpenCountryLetterAction()
+  );
+  await runHrefEntryNavigation(
+    config,
+    "opening United States of America",
+    buildOpenCountryAction(),
+    4500,
+    buildPatternPresenceAction(
+      "runtime.CONFIG.consulatePattern",
+      "expectConsulateList",
+      [
+        "runtime.CONFIG.registrationPattern",
+        "runtime.CONFIG.imageVerificationPattern"
+      ],
+      [
+        "registration_home",
+        "captcha_step",
+        "selection_step",
+        "all_dates_reserved",
+        "date_options_present"
+      ]
+    )
+  );
+  await runHrefEntryNavigation(
+    config,
+    "opening Consulate General of the Republic of Poland in Los Angeles",
+    buildOpenConsulateAction(),
+    4500,
+    buildPatternPresenceAction(
+      "runtime.CONFIG.registrationPattern",
+      "expectRegistrationList",
+      ["runtime.CONFIG.imageVerificationPattern"],
+      [
+        "registration_home",
+        "captcha_step",
+        "selection_step",
+        "all_dates_reserved",
+        "date_options_present"
+      ]
+    )
+  );
+  await runHrefEntryNavigation(
+    config,
+    "opening Schengen Visa - Register the form",
+    buildOpenRegistrationAction(),
+    6000,
+    buildPatternPresenceAction(
+      "runtime.CONFIG.imageVerificationPattern",
+      "expectCaptchaStep",
+      [],
+      ["captcha_step", "selection_step", "all_dates_reserved", "date_options_present"]
+    )
+  );
 }
 
 /**
@@ -559,8 +837,8 @@ async function fillPostCaptchaSelections(config) {
   logStep("selecting service");
   result.service = await runPageAction(
     buildSelectAction(
-      "runtime.CONFIG.serviceFieldPattern",
-      "runtime.CONFIG.servicePattern",
+      "runtime.CONFIG.englishServiceFieldPattern",
+      "runtime.CONFIG.englishServicePattern",
       "selectService"
     )
   );
@@ -571,8 +849,8 @@ async function fillPostCaptchaSelections(config) {
   logStep("selecting location");
   result.location = await runPageAction(
     buildSelectAction(
-      "runtime.CONFIG.locationFieldPattern",
-      "runtime.CONFIG.locationPattern",
+      "runtime.CONFIG.englishLocationFieldPattern",
+      "runtime.CONFIG.englishLocationPattern",
       "selectLocation"
     )
   );
@@ -768,6 +1046,42 @@ function hasUsableRefreshClickPoint(refreshTarget) {
   return Boolean(
     refreshTarget &&
     refreshTarget.clickPoint &&
+    xValue !== null &&
+    xValue !== undefined &&
+    yValue !== null &&
+    yValue !== undefined &&
+    xValue !== "" &&
+    yValue !== "" &&
+    Number.isFinite(Number(xValue)) &&
+    Number.isFinite(Number(yValue))
+  );
+}
+
+/**
+ * 作用：
+ * 判断任意页面动作结果里是否带有可执行真实鼠标点击的屏幕坐标。
+ *
+ * 为什么这样写：
+ * 入口导航现在也可能需要退回到真实点击，而不只是验证码刷新按钮会用到点击坐标。
+ * 把这条数值校验抽成独立纯函数后，入口步骤和刷新步骤都能复用同一套判断标准。
+ *
+ * 输入：
+ * @param {object} actionResult - 页面动作结果对象。
+ *
+ * 输出：
+ * @returns {boolean} 是否存在可用的 clickPoint。
+ *
+ * 注意：
+ * - 当前只校验 clickPoint.x 和 clickPoint.y。
+ * - 坐标字符串也会被接受，只要能安全转成有限数字。
+ */
+function hasUsableScreenClickPoint(actionResult) {
+  const xValue = actionResult && actionResult.clickPoint ? actionResult.clickPoint.x : undefined;
+  const yValue = actionResult && actionResult.clickPoint ? actionResult.clickPoint.y : undefined;
+
+  return Boolean(
+    actionResult &&
+    actionResult.clickPoint &&
     xValue !== null &&
     xValue !== undefined &&
     yValue !== null &&
@@ -2520,7 +2834,9 @@ module.exports = {
   createRefreshDiagnosticRunContext,
   canReuseExistingCaptchaCollectionSnapshot,
   hasFreshCaptchaSnapshot,
+  hasMatchedEntryEvidence,
   hasUsableRefreshClickPoint,
+  hasUsableScreenClickPoint,
   getCaptchaSnapshotSignature,
   isChromeTabNotFoundError,
   main,

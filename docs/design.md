@@ -24,10 +24,12 @@
 ## 2. Execution Flow
 
 1. `check` loads config and ensures `artifacts/` exists.
-2. The CLI opens real Chrome to the fixed Los Angeles Schengen captcha URL.
-3. The CLI verifies that Apple Events JavaScript is available in Chrome.
-4. The page runtime snapshots the current state.
-5. If the page is at captcha:
+2. The CLI opens real Chrome to `https://secure.e-konsulat.gov.pl/`.
+3. The CLI switches the yellow top-bar `Wersja językowa / Language version` dropdown to `English`, opens `U`, then opens `United States of America`.
+4. The CLI opens `Consulate General of the Republic of Poland in Los Angeles`, then `Schengen Visa - Register the form`.
+5. The CLI verifies that Apple Events JavaScript is available in Chrome.
+6. The page runtime snapshots the current state.
+7. If the page is at captcha:
    - capture captcha image
    - capture an alternate processed captcha image in the page runtime
    - save image to `artifacts/`
@@ -35,33 +37,33 @@
    - evaluate distance, segmentation quality, and overall confidence
    - submit the best local-model guess only when it passes the quality gates
    - if the captcha is rejected, capture the refreshed image and retry automatically
-   - fill the captcha input and click `Dalej`
-6. If captcha success returns to the registration home, reopen the fixed Schengen URL.
-7. If the page is at the selection step, the runtime selects:
-   - `Rodzaj usługi = Wiza Schengen`
-   - `Lokalizacja = Los Angeles`
-   - `Chcę zarezerwować termin dla = 1 osob`
-8. The CLI writes a `post-captcha-before-selection` artifact once captcha is cleared.
-9. The runtime reads the `Termin` control and the reserved-message area.
-10. The CLI writes a `post-captcha-after-selection` artifact with field diagnostics and selection action results.
-11. `src/status.js` converts those signals into the final status object, including a body-text fallback for the final Polish no-slot sentence.
-12. The CLI prints compact JSON and sends a positive-hit local alert only if dates are available.
-13. The CLI prints one final Chinese summary line after the JSON: `有预约时间` or `没有预约时间`.
-14. If the command is `collect-captcha`, the CLI saves captcha samples and a blank labeling manifest instead of submitting the form.
-15. If the command is `diagnose-refresh`, the CLI runs refresh-only attempts, records before/after evidence, and writes a structured summary for Phase A analysis.
-16. If the command is `captcha:label`, the local labeler selects the latest dataset, opens a tiny browser UI, and saves each `expectedText` update back into `labels.json`.
-17. If the command is `captcha:suggest`, the local-model suggester scans unlabeled entries, writes `ocrText` and confidence metadata into the manifest, and leaves human confirmation to the labeler.
-18. If the command is `captcha:prepare-train`, the training exporter validates the manifest, copies images into a training directory, assigns deterministic splits, and writes summary plus JSONL files.
-19. If the command is `captcha:train-local`, the local trainer rebuilds the training directory, decodes PNG captchas, extracts 4 glyph vectors per image, trains a hybrid character model from the train split, and writes summary plus per-split prediction reports.
-20. If the command is `captcha:analyze`, the analyzer reads the latest model artifacts and reprints holdout confusion, serif hard-case, position, symbol, and 5-attempt metrics.
-21. If the command is `schedule:launchd`, the generator writes a shell script, a `.plist`, and an `INSTALL.md` guide into `scheduler/` so macOS can call the single-run `check` every 2 hours.
-22. If the operator runs `scripts/run-check-every-90-seconds.sh`, the shell helper changes into the project root, runs one `npm run check`, and sleeps only the remaining seconds needed to keep an approximately 90-second cycle.
-23. If the operator runs the older `scripts/run-check-every-2-minutes.sh` path, the wrapper immediately `exec`s into the new 90-second helper so existing habits keep working.
+   - fill the captcha input and click `Next`
+8. If captcha success returns to the registration home, reopen the English homepage flow and re-enter the Los Angeles Schengen registration page.
+9. If the page is at the selection step, the runtime selects:
+   - `Type of service = Schengen Visa`
+   - `Location = Los Angeles`
+   - `I want to reserve a date for = 1 person`
+10. The CLI writes a `post-captcha-before-selection` artifact once captcha is cleared.
+11. The runtime reads the `Date` control and the reserved-message area.
+12. The CLI writes a `post-captcha-after-selection` artifact with field diagnostics and selection action results.
+13. `src/status.js` converts those signals into the final status object, including a body-text fallback for the final Polish no-slot sentence.
+14. The CLI prints compact JSON and sends a positive-hit local alert only if dates are available.
+15. The CLI prints one final Chinese summary line after the JSON: `有预约时间` or `没有预约时间`.
+16. If the command is `collect-captcha`, the CLI saves captcha samples and a blank labeling manifest instead of submitting the form.
+17. If the command is `diagnose-refresh`, the CLI runs refresh-only attempts, records before/after evidence, and writes a structured summary for Phase A analysis.
+18. If the command is `captcha:label`, the local labeler selects the latest dataset, opens a tiny browser UI, and saves each `expectedText` update back into `labels.json`.
+19. If the command is `captcha:suggest`, the local-model suggester scans unlabeled entries, writes `ocrText` and confidence metadata into the manifest, and leaves human confirmation to the labeler.
+20. If the command is `captcha:prepare-train`, the training exporter validates the manifest, copies images into a training directory, assigns deterministic splits, and writes summary plus JSONL files.
+21. If the command is `captcha:train-local`, the local trainer rebuilds the training directory, decodes PNG captchas, extracts 4 glyph vectors per image, trains a hybrid character model from the train split, and writes summary plus per-split prediction reports.
+22. If the command is `captcha:analyze`, the analyzer reads the latest model artifacts and reprints holdout confusion, serif hard-case, position, symbol, and 5-attempt metrics.
+23. If the command is `schedule:launchd`, the generator writes a shell script, a `.plist`, and an `INSTALL.md` guide into `scheduler/` so macOS can call the single-run `check` every 2 hours.
+24. If the operator runs `scripts/run-check-every-90-seconds.sh`, the shell helper changes into the project root, runs one `npm run check`, and sleeps only the remaining seconds needed to keep an approximately 90-second cycle.
+25. If the operator runs the older `scripts/run-check-every-2-minutes.sh` path, the wrapper immediately `exec`s into the new 90-second helper so existing habits keep working.
 
 ## 3. Rule Mapping
 
 - Rule: the tool should only support the Los Angeles Schengen flow.
-  Design: the bridge always navigates to the fixed `wiza-schengen/wizyty/weryfikacja-obrazkowa` path.
+  Design: the bridge always starts from the e-Konsulat homepage, switches to English, opens the `U -> United States of America -> Consulate General of the Republic of Poland in Los Angeles -> Schengen Visa - Register the form` chain, and only then continues into the existing captcha flow.
 
 - Rule: recurring execution should wrap the single-run checker instead of introducing a separate watch loop.
   Design: `src/launchd.js` generates a macOS `launchd` bundle whose shell script runs exactly one `src/chrome-cli.js check` per trigger.
@@ -88,7 +90,7 @@
   Design: the page runtime now uses the same stronger mouse-event sequence for `Odśwież` that it already uses for custom control triggers, instead of relying on `element.click()` alone.
 
 - Rule: visible labels may sit inside nested button wrappers.
-  Design: a shared page activation helper now triggers both the matched node and its nearest actionable ancestor so Material-style wrappers can still react to `Odśwież` and `Dalej`.
+  Design: a shared page activation helper now triggers both the matched node and its nearest actionable ancestor so Material-style wrappers can still react to `Odśwież` and `Next`.
 
 - Rule: some captcha refresh actions may require a real user gesture.
   Design: when DOM refresh leaves the captcha signature unchanged, the CLI asks the page runtime for the refresh button screen point and sends a macOS-level mouse click through a bridge fallback.
@@ -116,6 +118,36 @@
 
 - Rule: positive-hit desktop notifications should be readable at a glance by the local operator.
   Design: `src/notifier.js` emits concise Chinese notification copy for local alerts and reused webhook payloads, while macOS local delivery now layers notification sound, terminal bell, and optional speech on top of the same payload.
+
+- Rule: the live site entry path should match the visible English UI instead of assuming a stale deep link.
+  Design: `src/chrome-cli.js` now drives a small sequence of homepage actions, while `src/chrome-page.js` exposes dedicated runtime actions for switching the language dropdown, clicking the `U` filter, and resolving the country / consulate / registration href targets.
+
+- Rule: the homepage language dropdown must still be found when the top-bar label is visually present but not cleanly attached to the DOM control.
+  Design: `src/chrome-page.js` now explicitly locates the yellow top-bar `Wersja językowa / Language version` dropdown, including the live `mat-select / role="combobox"` markup, scores it with layout and language-option evidence, and then switches that exact control to `English`.
+
+- Rule: entry links must still work when the live Angular list renders `<a href="">` placeholders instead of concrete URLs.
+  Design: `src/chrome-page.js` now treats country / consulate / registration links as dual-mode actions: inspect the raw anchor `href` attribute, use a real href only when that raw attribute is non-empty, otherwise trigger the matched clickable element inline and let `src/chrome-cli.js` wait for the route change.
+
+- Rule: clicking an empty-`href` Angular entry must not reopen the current page.
+  Design: `src/chrome-page.js` now detects placeholder anchors and skips the native `.click()` call for them, while still dispatching the synthetic pointer / mouse events that Angular handlers rely on.
+
+- Rule: list-style country and consulate pages must click the exact matched row instead of the first link inside a broad container match.
+  Design: `src/chrome-page.js` now ranks navigation candidates by tighter text / area heuristics and only falls back to descendants that also match the requested pattern, so `UNITED STATES OF AMERICA (14)` does not collapse to an unrelated sibling link.
+
+- Rule: entry navigation should not continue until the next page has actually exposed the expected evidence.
+  Design: `src/chrome-cli.js` now polls for consulate / registration / captcha evidence after each homepage navigation step, and if an inline click still does not advance the page, it retries once with a real pointer click using the target element's screen coordinates.
+
+- Rule: a homepage click that lands directly on a later valid page should still count as successful progress.
+  Design: `src/chrome-page.js` now lets each entry evidence action accept fallback downstream patterns plus specific `readAvailability()` reasons such as `registration_home`, `captcha_step`, `selection_step`, `all_dates_reserved`, and `date_options_present`, so `src/chrome-cli.js` does not reject flows that skip an intermediate page.
+
+- Rule: once the page has already advanced to a valid downstream state, later stale entry clicks should be skipped instead of retried as hard failures.
+  Design: `src/chrome-cli.js` now prechecks expected entry evidence before each country / consulate / registration action, and when a target cannot be resolved it rechecks the same evidence once more before throwing, so fast or self-refreshing transitions do not break the flow.
+
+- Rule: the homepage language dropdown must never be mistaken for a post-captcha appointment-form dropdown.
+  Design: `src/chrome-page.js` now removes the homepage language trigger from appointment choice ordering and only enables field-order fallback when at least two appointment-form dropdowns are visible, so the country page no longer collapses into a false `selection_step`.
+
+- Rule: once the page is already in English, post-captcha service and location selection should explicitly target the English labels and option text.
+  Design: `src/chrome-page.js` now exposes dedicated English field and option patterns for `Type of service` and `Location`, and `src/chrome-cli.js` uses those English-only patterns for the automatic service/location selection steps.
 
 - Rule: captcha dataset collection should support later manual labeling.
   Design: `collect-captcha` writes a per-run dataset directory with image files and a `labels.json` template.
@@ -243,7 +275,7 @@
   - custom combobox support
   - alternate captcha capture generation
 - Unit-test bridge and helper utilities for:
-  - fixed Schengen URL generation
+  - English homepage entry URL generation
   - always-auto-submit captcha policy
   - symbol-preserving captcha sanitation
   - 4-character captcha candidate extraction
