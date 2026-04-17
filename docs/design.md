@@ -4,6 +4,7 @@
 
 - `src/chrome-cli.js`: the primary v1 entrypoint for `doctor`, `check`, `debug`, `collect-captcha`, and `diagnose-refresh`
 - `src/launchd.js`: bundle generator for a 2-hour macOS `launchd` wrapper around the single-run checker
+- `scripts/run-check-every-2-minutes.sh`: foreground shell helper that reruns the single-run checker every 120 seconds until the terminal session stops it
 - `scheduler/`: tracked home for generated `launchd` install files, distinct from ignored runtime `artifacts/`
 - `data/`: tracked home for the consolidated captcha image library, label manifest, and training export directory
 - `model/`: tracked home for the current local captcha model and evaluation reports
@@ -16,7 +17,7 @@
 - `src/chrome-page.js`: in-page DOM runtime for captcha detection, dropdown selection, and availability reading
 - `src/chrome-utils.js`: shared captcha heuristics, bridge helpers, and snapshot normalization
 - `src/status.js`: pure availability inference from page signals
-- `src/notifier.js`: desktop notification fan-out for positive hits
+- `src/notifier.js`: positive-hit local alert fan-out for desktop notification, terminal bell, speech, and webhook channels
 - `test/*.test.js`: unit tests for inference, bridge helpers, and page-runtime source generation
 
 ## 2. Execution Flow
@@ -43,7 +44,7 @@
 9. The runtime reads the `Termin` control and the reserved-message area.
 10. The CLI writes a `post-captcha-after-selection` artifact with field diagnostics and selection action results.
 11. `src/status.js` converts those signals into the final status object, including a body-text fallback for the final Polish no-slot sentence.
-12. The CLI prints compact JSON and sends a desktop notification only if dates are available.
+12. The CLI prints compact JSON and sends a positive-hit local alert only if dates are available.
 13. The CLI prints one final Chinese summary line after the JSON: `有预约时间` or `没有预约时间`.
 14. If the command is `collect-captcha`, the CLI saves captcha samples and a blank labeling manifest instead of submitting the form.
 15. If the command is `diagnose-refresh`, the CLI runs refresh-only attempts, records before/after evidence, and writes a structured summary for Phase A analysis.
@@ -53,6 +54,7 @@
 19. If the command is `captcha:train-local`, the local trainer rebuilds the training directory, decodes PNG captchas, extracts 4 glyph vectors per image, trains a hybrid character model from the train split, and writes summary plus per-split prediction reports.
 20. If the command is `captcha:analyze`, the analyzer reads the latest model artifacts and reprints holdout confusion, serif hard-case, position, symbol, and 5-attempt metrics.
 21. If the command is `schedule:launchd`, the generator writes a shell script, a `.plist`, and an `INSTALL.md` guide into `scheduler/` so macOS can call the single-run `check` every 2 hours.
+22. If the operator runs `scripts/run-check-every-2-minutes.sh`, the shell helper changes into the project root, runs one `npm run check`, and sleeps only the remaining seconds needed to keep an approximately 2-minute cycle.
 
 ## 3. Rule Mapping
 
@@ -61,6 +63,9 @@
 
 - Rule: recurring execution should wrap the single-run checker instead of introducing a separate watch loop.
   Design: `src/launchd.js` generates a macOS `launchd` bundle whose shell script runs exactly one `src/chrome-cli.js check` per trigger.
+
+- Rule: the user may want repeated execution in the current terminal without installing background scheduling.
+  Design: `scripts/run-check-every-2-minutes.sh` provides a foreground loop that stays user-visible, keeps the cadence near 120 seconds, and exits naturally on `Ctrl-C`.
 
 - Rule: post-captcha selection should only fill the three variable dropdowns.
   Design: the CLI no longer selects country or office after captcha.
@@ -108,7 +113,7 @@
   Design: `check` prints only the compact status JSON, while `debug` prints the full normalized snapshot.
 
 - Rule: positive-hit desktop notifications should be readable at a glance by the local operator.
-  Design: `src/notifier.js` now emits concise Chinese notification copy for both macOS desktop alerts and any reused webhook payloads.
+  Design: `src/notifier.js` emits concise Chinese notification copy for local alerts and reused webhook payloads, while macOS local delivery now layers notification sound, terminal bell, and optional speech on top of the same payload.
 
 - Rule: captcha dataset collection should support later manual labeling.
   Design: `collect-captcha` writes a per-run dataset directory with image files and a `labels.json` template.
@@ -196,6 +201,8 @@
   stay on the captcha page, execute refresh attempts, store the pre/post captcha signatures and images, and persist the chosen refresh target, the broader refresh candidate list, and the raw visible-actionable-control dump for each attempt
 - Scheduling behavior:
   keep `check` as a single-run entrypoint, generate a separate shell script that `cd`s into the project and runs one check, and point the generated plist at that script with `StartInterval=7200`
+- Foreground-repeat behavior:
+  keep `check` as the single-run entrypoint, and let `scripts/run-check-every-2-minutes.sh` wrap it with a terminal-bound loop that compensates for the last run duration before sleeping
 
 ## 5. Availability Inference
 
@@ -218,6 +225,7 @@
 - If the runtime still cannot point at a usable refresh control, the diagnostic record should preserve all matched refresh candidates so selector misses can be analyzed offline.
 - If the runtime still cannot match any refresh candidate, the diagnostic record should preserve the visible actionable controls so Phase A can inspect search texts and hidden-character issues directly from artifacts.
 - If the user wants every-2-hours automation, the project should generate but not auto-install a `launchd` bundle, because writing directly into `~/Library/LaunchAgents` is a system-level choice better left explicit.
+- If the user wants “run now until I stop this terminal,” the shell helper should be preferred over `launchd`, because the requested lifecycle is tied to the current foreground session.
 - If a desktop notification fires on a scheduled run, the alert text should stay short enough for the macOS banner and should not depend on the terminal being open.
 
 ## 7. Testing Strategy
@@ -247,6 +255,7 @@
   - PNG decode helpers, thresholding helpers, glyph-boundary selection, hybrid-model classification, and analysis helpers
   - post-captcha artifact writing and selection-diagnostic normalization
   - snapshot normalization
+  - foreground repeat-check shell helper content
   - launchd label generation, shell/plist generation, and bundle writing
 
 ## 8. Known Risks

@@ -11,6 +11,7 @@ Single-run macOS CLI for checking whether the Poland Schengen visa page for Los 
 - Tries both raw and processed captcha captures and submits the best 4-character model candidate automatically
 - Preserves visible captcha symbols such as `@`, `+`, and `=` instead of stripping them out
 - Scores captcha submissions with distance, segmentation quality, and overall confidence gates before submitting
+- Includes a foreground shell helper for running the checker every 2 minutes in the current terminal until you stop it
 - Generates a ready-to-install macOS `launchd` bundle for running the checker every 2 hours
 - Clicks `Dalej`
 - Selects:
@@ -19,6 +20,7 @@ Single-run macOS CLI for checking whether the Poland Schengen visa page for Los 
   - `Chcę zarezerwować termin dla = 1 osob`
 - Detects whether `Termin` has real options or whether the page shows the Polish “all reserved” message
 - Saves post-captcha status artifacts so we can inspect exactly which dropdowns were found and what options were visible
+- Fires a stronger local positive-hit alert on macOS with notification sound, terminal bell, and speech so “有号了” is harder to miss
 - After each captcha submit, treats visible post-captcha dropdowns as stronger evidence than the old captcha URL, so the terminal stops waiting once the next page is reached
 - After each captcha submit, performs a dedicated post-submit snapshot poll for the next page instead of only waiting on captcha-specific signals
 - After each captcha submit, also treats the visible next-step field labels themselves as strong post-captcha evidence, even before the dropdown controls finish hydrating
@@ -46,6 +48,16 @@ Single-run macOS CLI for checking whether the Poland Schengen visa page for Los 
 npm install
 ```
 
+Optional notification tuning in `.env`:
+
+```bash
+NOTIFY_MACOS=true
+NOTIFY_MACOS_SOUND_NAME=Glass
+NOTIFY_MACOS_SPEAK=true
+NOTIFY_TERMINAL_BELL=true
+NOTIFY_TERMINAL_BELL_REPEAT_COUNT=3
+```
+
 ## Commands
 
 Check that Chrome can be controlled:
@@ -58,6 +70,12 @@ Run one end-to-end vacancy check:
 
 ```bash
 npm run check
+```
+
+Run the checker every 2 minutes in the current terminal until you press `Ctrl-C`:
+
+```bash
+./scripts/run-check-every-2-minutes.sh
 ```
 
 Open the target page and print a full debug snapshot:
@@ -173,6 +191,7 @@ npm test
 ## Notes
 
 - `check` is now fully automated around the local captcha model. The terminal no longer blocks waiting for manual captcha correction.
+- `./scripts/run-check-every-2-minutes.sh` is a foreground helper for “run now and keep going in this terminal”; stop it with `Ctrl-C`.
 - `check` now loads `model/captcha-model-current/model.json` by default and evaluates the best local-model guess on each attempt.
 - The captcha alphabet remains restricted to known 4-character symbols, including `@`, `+`, `=`, and `#`.
 - The page runtime exposes both raw and processed captcha captures so the local model can score multiple variants before the next retry.
@@ -190,11 +209,20 @@ npm test
 - The post-captcha selector runtime now falls back to the visible vertical order of the four `mat-select` controls when the live page does not expose usable label text around each dropdown.
 - Final “all reserved” detection now also falls back to normalized `bodyTextSample/bodyTextTailSample`, so the Polish result is still recognized even when runtime-level `unavailabilityText` is temporarily empty.
 - Positive hits still use macOS desktop notification support when enabled, and the notification copy is now Chinese.
+- Positive hits now also request a macOS notification sound, ring the current terminal bell, and speak a short local alert by default, so foreground repeat-check runs are much harder to miss.
 - Debug mode is intentionally verbose; normal `check` output is intentionally compact.
 - `npm run schedule:launchd` writes a shell script, a `.plist`, and an `INSTALL.md` guide into `scheduler/`.
 - The generated `launchd` bundle does not install itself automatically; you still copy the `.plist` into `~/Library/LaunchAgents/` when you are ready.
 
 ## macOS Scheduling
+
+If you want a foreground terminal loop instead of a background scheduler, run:
+
+```bash
+./scripts/run-check-every-2-minutes.sh
+```
+
+That helper keeps one `npm run check` cycle every 120 seconds in the current terminal and stops only when you press `Ctrl-C`.
 
 Run:
 

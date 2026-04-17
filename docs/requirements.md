@@ -9,6 +9,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - As a visa applicant, I want one command to drive the real Chrome flow so I do not need to click through the same steps manually.
 - As a visa applicant, I want OCR to keep pushing captcha attempts automatically so the CLI does not stop for manual intervention.
 - As a visa applicant, I want a clear machine-readable result that tells me whether dates exist, all dates are reserved, or the page is blocked.
+- As a visa applicant, I want a terminal-bound helper script that starts immediately and reruns the checker every 2 minutes until I manually stop it.
 - As a visa applicant, I want the project to generate a ready-to-install macOS `launchd` bundle so I can run the checker every 2 hours without keeping a terminal open.
 
 ## 3. Functional Requirements
@@ -43,6 +44,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Print compact JSON with `checkedAt`, `isAvailable`, `reason`, `availableDateCount`, `optionTexts`, and `pageUrl`.
 - After the JSON block, print one final Chinese summary line: `有预约时间` or `没有预约时间`.
 - Support `doctor`, `check`, `debug`, and `collect-captcha` commands.
+- Provide a tracked shell helper at `scripts/run-check-every-2-minutes.sh` that reruns `npm run check` every 120 seconds in the current terminal until interrupted.
 - Support a `schedule:launchd` command that writes a 2-hour macOS `launchd` bundle into the workspace.
 - Support a `captcha:label` command that opens a local one-image-at-a-time labeling UI on top of `labels.json`.
 - Support a `captcha:suggest` command that batch-runs the current local captcha model for unlabeled captcha entries and writes machine suggestions back into the manifest.
@@ -52,6 +54,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Support a `diagnose-refresh` command dedicated to Phase A refresh investigation.
 - Keep desktop notification support for positive hits.
 - Positive-hit macOS notifications must use Chinese copy so the operator can react immediately without reading English system alerts.
+- Positive-hit local alerts must remain hard to miss during foreground terminal loops by combining at least one visual alert with sound-capable local feedback.
 - `collect-captcha` must save a batch of captcha images for later manual labeling.
 - `collect-captcha` must write a `labels.json` manifest with blank `expectedText` fields.
 - `collect-captcha` must record per-sample provenance fields such as `signatureHash`, `refreshMethod`, `refreshContext`, and `refreshRecordPath`.
@@ -81,6 +84,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 
 - This version must use real Google Chrome, not Playwright-first automation.
 - This version must keep the checker itself single-run; the every-2-hours schedule is an outer `launchd` wrapper, not an internal watch loop.
+- The foreground helper script must stay terminal-bound and must stop when the operator stops the shell process.
 - OCR is assistive only and must auto-submit valid 4-character results without blocking on manual help.
 - The first local captcha model is now the only captcha solver in live `check`.
 - The current local captcha model must preserve the earlier global-prototype path as the fallback scoring anchor even after adding position-aware exemplars and multi-prototype clusters.
@@ -121,6 +125,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - If the command is `captcha:analyze`, read the latest model artifacts and reprint holdout-oriented analysis fields instead of retraining the model.
 - If the command is `diagnose-refresh`, stay on the captcha page, run refresh attempts repeatedly, and persist structured evidence about each attempt instead of collecting labels.
 - If the command is `schedule:launchd`, generate a shell script, a `.plist`, and an install guide under `scheduler/`.
+- If the operator runs `scripts/run-check-every-2-minutes.sh`, execute one `npm run check`, then wait just long enough to keep the start-to-start cadence near 120 seconds before repeating.
 - Captcha refresh must activate the visible `Odśwież` button with a full mouse-event sequence instead of relying on a plain DOM `click()` only.
 - The page runtime must also try the matched element's nearest actionable ancestor when triggering `Odśwież` or `Dalej`, because the live site may wrap visible text inside nested Material-style button markup.
 - Refresh target discovery must not rely only on native button selectors; it must also inspect visible text matches and their nearest actionable ancestors.
@@ -169,7 +174,9 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Treat normalized reserved-message matching as a required heuristic, because the live page can visually show the final state while raw DOM text still differs in whitespace or Unicode composition.
 - Treat `bodyTextSample/bodyTextTailSample` as the final no-slot fallback, because the live final page can visually show the result even when the explicit unavailable field was not captured in that exact snapshot.
 - Treat macOS `launchd` as the simplest recurring wrapper for this project, because the checker already depends on a local Chrome session and Apple Events permissions.
+- Treat the foreground shell helper as the fastest manual recurrence path, because it lets the operator start repeated checks immediately without installing any system scheduler.
 - Treat positive-hit notifications as high-priority operator alerts, so the default desktop copy should be short, direct, and localized in Chinese.
+- Treat foreground-loop alerts as multi-channel local signals, because a single silent macOS banner is too easy to miss during long-running terminal use.
 - Treat refresh diagnostics as the prerequisite evidence layer before changing OCR or model strategy again.
 - Treat refresh-candidate enumeration as the first Phase A debugging surface, because a visible `Odśwież` label does not guarantee the current selector points at the real interactive node.
 - When refresh-candidate enumeration returns nothing, treat the actionable-control dump as the next debugging surface before changing click strategy again.
@@ -184,10 +191,13 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - Detect unavailable state using the exact Polish sentence, with English fallback kept only as compatibility.
 - For the first local trainer, prefer a deterministic character prototype model over heavier dependencies, because the immediate goal is to validate dataset learnability on the current machine.
 - For recurring runs on macOS, prefer generating a `launchd` bundle over embedding a sleep loop, because the project already needs GUI-friendly local scheduling.
+- For operator-supervised reruns in the active terminal, prefer the dedicated shell helper over manually pasting a `while true` loop each time.
+- For positive-hit alerts during operator-supervised reruns, prefer layered local reminders such as desktop notification sound, terminal bell, and speech over a single silent channel.
 
 ## 8. Roadmap
 
 - Add a one-command installer/uninstaller wrapper around the generated `launchd` bundle after the current manual-copy flow is proven stable.
+- Keep the foreground helper script as the quick interactive mode while background scheduling continues to live in the separate `launchd` path.
 - Add polling after the single-run flow is stable enough that an outer scheduler is no longer sufficient.
 - Add structured notification templates for Telegram, Discord, Slack, and ntfy.
 - Improve captcha preprocessing before OCR.
@@ -217,6 +227,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 ### PC
 
 - Keep normal `check` output compact and machine-readable.
+- Keep the foreground repeat-check shell helper readable enough that the operator can see each cycle start and sleep interval directly in terminal output.
 - Keep `debug` output verbose for troubleshooting.
 - Save captcha images into `artifacts/` so the user can inspect them outside the terminal.
 - Save collected captcha samples into per-run directories so the operator can label them batch by batch.
@@ -275,3 +286,5 @@ Build a single-run local tool that checks whether the Polish e-Konsulat Schengen
 - 2026-04-05: added checker-side segmentation-quality and model-confidence gates so low-quality captcha splits are refreshed instead of being submitted blindly.
 - 2026-04-05: added `captcha:analyze` so every training round can now be reviewed through holdout confusion pairs, per-position accuracy, and 5-attempt budget estimates without retraining.
 - 2026-04-05: simplified the Chrome AppleScript tab-preparation fallback to `tell application "Google Chrome" to activate` plus a single-line `tell application "Google Chrome" to Get URL ...`, so captcha collection no longer depends on brittle window/tab traversal when the current page cannot be reused.
+- 2026-04-16: added `scripts/run-check-every-2-minutes.sh`, so the checker can now be repeated in the current terminal every 2 minutes until the operator stops it with `Ctrl-C`.
+- 2026-04-16: strengthened positive-hit local alerts so macOS runs now request a notification sound, ring the current terminal bell, and speak a short reminder instead of relying on a silent banner only.

@@ -71,6 +71,11 @@ function loadChromeCliConfig() {
     baseUrl: CHROME_TARGET_URL,
     artifactsDir,
     notifyMacOs: String(process.env.NOTIFY_MACOS || "true").toLowerCase() === "true",
+    notifyMacOsSoundName: process.env.NOTIFY_MACOS_SOUND_NAME || "Glass",
+    notifyMacOsSpeak: String(process.env.NOTIFY_MACOS_SPEAK || "true").toLowerCase() === "true",
+    notifyTerminalBell:
+      String(process.env.NOTIFY_TERMINAL_BELL || "true").toLowerCase() === "true",
+    notifyTerminalBellRepeatCount: Number(process.env.NOTIFY_TERMINAL_BELL_REPEAT_COUNT || 3),
     notifyWebhookUrl: process.env.NOTIFY_WEBHOOK_URL || "",
     webhookAuthHeader: process.env.WEBHOOK_AUTH_HEADER || "",
     webhookAuthToken: process.env.WEBHOOK_AUTH_TOKEN || "",

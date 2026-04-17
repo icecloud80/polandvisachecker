@@ -1,7 +1,12 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { buildNotificationPayload } = require("../src/notifier");
+const {
+  buildMacOsNotificationAppleScript,
+  buildMacOsSpeechText,
+  buildNotificationPayload,
+  buildTerminalBellSequence,
+} = require("../src/notifier");
 
 /**
  * 作用：
@@ -64,4 +69,110 @@ test("buildNotificationPayload returns no-slot copy for unavailable dates", () =
   assert.equal(payload.title, "波兰签证检查完成");
   assert.match(payload.body, /暂时没有预约时间/);
   assert.match(payload.body, /all_dates_reserved/);
+});
+
+/**
+ * 作用：
+ * 验证 macOS 通知脚本会包含标题、正文和声音名。
+ *
+ * 为什么这样写：
+ * 本次修复的核心是把原来容易错过的静默提醒升级成带声音的本机通知。
+ * 用纯函数测试锁住最终 AppleScript 内容，能防止以后重构时声音参数再次丢失。
+ *
+ * 输入：
+ * @param {object} 无 - 直接构造示例标题和正文。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 这里测试的是脚本拼装结果，不直接依赖本机通知权限。
+ * - 双引号内容必须保持可安全嵌入 AppleScript。
+ */
+test("buildMacOsNotificationAppleScript includes sound for positive-hit notifications", () => {
+  const script = buildMacOsNotificationAppleScript(
+    '波兰签证有预约时间',
+    '洛杉矶检测到 1 个可预约时间，请尽快查看。',
+    "Glass"
+  );
+
+  assert.match(script, /display notification/);
+  assert.match(script, /with title "波兰签证有预约时间"/);
+  assert.match(script, /洛杉矶检测到 1 个可预约时间，请尽快查看。/);
+  assert.match(script, /sound name "Glass"/);
+});
+
+/**
+ * 作用：
+ * 验证正向命中时会生成简短的语音播报文本。
+ *
+ * 为什么这样写：
+ * 语音播报是对横幅通知的可靠补充。
+ * 这条测试锁住“只有 available 时才播报、并且播报包含地点和数量”的契约。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入示例结果。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 当前语音文案优先使用英文短句，避免系统默认中文语音在部分机器上发音不稳定。
+ * - 不可用状态应返回空串，避免每轮无号都朗读打扰。
+ */
+test("buildMacOsSpeechText returns a concise speech message only for available results", () => {
+  const speechText = buildMacOsSpeechText(
+    {
+      status: {
+        isAvailable: true,
+        availableDateCount: 2,
+      },
+    },
+    {
+      title: "波兰签证有预约时间",
+      body: "洛杉矶检测到 2 个可预约时间，请尽快查看。",
+    }
+  );
+
+  assert.match(speechText, /Poland visa appointment available/i);
+  assert.match(speechText, /Los Angeles/);
+  assert.match(speechText, /2 appointment options/);
+  assert.equal(
+    buildMacOsSpeechText(
+      {
+        status: {
+          isAvailable: false,
+          availableDateCount: 0,
+        },
+      },
+      {
+        title: "波兰签证检查完成",
+        body: "暂时没有预约时间。",
+      }
+    ),
+    ""
+  );
+});
+
+/**
+ * 作用：
+ * 验证 terminal bell 序列会按配置次数重复输出。
+ *
+ * 为什么这样写：
+ * 当前用户直接在 terminal 里跑循环脚本。
+ * 这条测试锁住“命中时至少响铃一次，并且可重复几次加强提醒”的基础行为。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入 bell 次数。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - ASCII bell 字符本身不可见，因此只比较字符串长度和内容。
+ * - 次数异常时也应最少返回 1 个 bell。
+ */
+test("buildTerminalBellSequence repeats the terminal bell character", () => {
+  assert.equal(buildTerminalBellSequence(3), "\u0007\u0007\u0007");
+  assert.equal(buildTerminalBellSequence(0), "\u0007");
 });
