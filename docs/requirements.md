@@ -9,7 +9,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat English 
 - As a visa applicant, I want one command to drive the real Chrome flow so I do not need to click through the same steps manually.
 - As a visa applicant, I want OCR to keep pushing captcha attempts automatically so the CLI does not stop for manual intervention.
 - As a visa applicant, I want a clear machine-readable result that tells me whether dates exist, all dates are reserved, or the page is blocked.
-- As a visa applicant, I want a terminal-bound helper script that starts immediately and reruns the checker every 90 seconds until I manually stop it.
+- As a visa applicant, I want a terminal-bound helper script that starts immediately and reruns the checker every 2 minutes by default until I manually stop it, while still letting me override the minute interval from the command line.
 - As a visa applicant, I want the project to generate a ready-to-install macOS `launchd` bundle so I can run the checker every 2 hours without keeping a terminal open.
 
 ## 3. Functional Requirements
@@ -49,8 +49,8 @@ Build a single-run local tool that checks whether the Polish e-Konsulat English 
 - Print compact JSON with `checkedAt`, `isAvailable`, `reason`, `availableDateCount`, `optionTexts`, and `pageUrl`.
 - After the JSON block, print one final Chinese summary line: `有预约时间` or `没有预约时间`.
 - Support `doctor`, `check`, `debug`, and `collect-captcha` commands.
-- Provide a tracked shell helper at `scripts/run-check-every-90-seconds.sh` that reruns `npm run check` every 90 seconds in the current terminal until interrupted.
-- Keep `scripts/run-check-every-2-minutes.sh` as a compatibility wrapper that forwards to the current 90-second foreground helper.
+- Provide a tracked shell helper at `scripts/run-check.sh` that reruns `npm run check` every 2 minutes by default in the current terminal until interrupted.
+- `scripts/run-check.sh` must accept `-m=<minutes>` and `-m <minutes>` so the repeat interval can be overridden from the command line.
 - Support a `schedule:launchd` command that writes a 2-hour macOS `launchd` bundle into the workspace.
 - Support a `captcha:label` command that opens a local one-image-at-a-time labeling UI on top of `labels.json`.
 - Support a `captcha:suggest` command that batch-runs the current local captcha model for unlabeled captcha entries and writes machine suggestions back into the manifest.
@@ -145,8 +145,8 @@ Build a single-run local tool that checks whether the Polish e-Konsulat English 
 - If the command is `captcha:analyze`, read the latest model artifacts and reprint holdout-oriented analysis fields instead of retraining the model.
 - If the command is `diagnose-refresh`, stay on the captcha page, run refresh attempts repeatedly, and persist structured evidence about each attempt instead of collecting labels.
 - If the command is `schedule:launchd`, generate a shell script, a `.plist`, and an install guide under `scheduler/`.
-- If the operator runs `scripts/run-check-every-90-seconds.sh`, execute one `npm run check`, then wait just long enough to keep the start-to-start cadence near 90 seconds before repeating.
-- If the operator runs `scripts/run-check-every-2-minutes.sh`, forward immediately to the current 90-second helper so older commands continue to work.
+- If the operator runs `scripts/run-check.sh`, execute one `npm run check`, then wait just long enough to keep the start-to-start cadence near the configured minute interval before repeating; the default interval is 2 minutes.
+- If the operator passes `-m=3` or `-m 3` to `scripts/run-check.sh`, repeat the foreground loop every 3 minutes instead of the default 2.
 - Captcha refresh must activate the visible `Odśwież` button with a full mouse-event sequence instead of relying on a plain DOM `click()` only.
 - The page runtime must also try the matched element's nearest actionable ancestor when triggering `Odśwież` or `Next`, because the live site may wrap visible text inside nested Material-style button markup.
 - Refresh target discovery must not rely only on native button selectors; it must also inspect visible text matches and their nearest actionable ancestors.
@@ -314,9 +314,9 @@ Build a single-run local tool that checks whether the Polish e-Konsulat English 
 - 2026-04-05: added checker-side segmentation-quality and model-confidence gates so low-quality captcha splits are refreshed instead of being submitted blindly.
 - 2026-04-05: added `captcha:analyze` so every training round can now be reviewed through holdout confusion pairs, per-position accuracy, and 5-attempt budget estimates without retraining.
 - 2026-04-05: simplified the Chrome AppleScript tab-preparation fallback to `tell application "Google Chrome" to activate` plus a single-line `tell application "Google Chrome" to Get URL ...`, so captcha collection no longer depends on brittle window/tab traversal when the current page cannot be reused.
-- 2026-04-16: added `scripts/run-check-every-2-minutes.sh`, so the checker can now be repeated in the current terminal every 2 minutes until the operator stops it with `Ctrl-C`.
+- 2026-04-16: added a foreground repeat-check helper so the checker can now be repeated in the current terminal every 2 minutes until the operator stops it with `Ctrl-C`.
 - 2026-04-16: strengthened positive-hit local alerts so macOS runs now request a notification sound, ring the current terminal bell, and speak a short reminder instead of relying on a silent banner only.
-- 2026-04-16: changed the foreground repeat-check cadence to 90 seconds by introducing `scripts/run-check-every-90-seconds.sh` and keeping the old 2-minute script name as a compatibility wrapper.
+- 2026-04-16: replaced the old foreground repeat-check entry with `scripts/run-check.sh`, restored the default cadence to 2 minutes, and added `-m=<minutes>` / `-m <minutes>` overrides.
 - 2026-04-16: changed the appointment entry flow to start from `https://secure.e-konsulat.gov.pl/`, switch to English, open `U -> United States of America -> Consulate General of the Republic of Poland in Los Angeles -> Schengen Visa - Register the form`, and then continue with the existing captcha and availability logic.
 - 2026-04-16: hardened the homepage language switch by explicitly targeting the yellow top-bar `Wersja językowa / Language version` dropdown, including the live `mat-select / role="combobox"` implementation for `English / Angielska`, and widened the country / consulate matching to tolerate the live Polish labels when the page has not switched yet.
 - 2026-04-16: hardened the homepage entry navigation again so country / consulate / registration steps now tolerate live Angular `<a href="">` links by falling back to inline click navigation when no concrete href is available.
