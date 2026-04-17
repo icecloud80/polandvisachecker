@@ -4,7 +4,8 @@
 
 - `src/chrome-cli.js`: the primary v1 entrypoint for `doctor`, `check`, `debug`, `collect-captcha`, and `diagnose-refresh`
 - `src/launchd.js`: bundle generator for a 2-hour macOS `launchd` wrapper around the single-run checker
-- `scripts/run-check-every-2-minutes.sh`: foreground shell helper that reruns the single-run checker every 120 seconds until the terminal session stops it
+- `scripts/run-check-every-90-seconds.sh`: foreground shell helper that reruns the single-run checker every 90 seconds until the terminal session stops it
+- `scripts/run-check-every-2-minutes.sh`: compatibility wrapper that forwards the old command name to the current 90-second helper
 - `scheduler/`: tracked home for generated `launchd` install files, distinct from ignored runtime `artifacts/`
 - `data/`: tracked home for the consolidated captcha image library, label manifest, and training export directory
 - `model/`: tracked home for the current local captcha model and evaluation reports
@@ -54,7 +55,8 @@
 19. If the command is `captcha:train-local`, the local trainer rebuilds the training directory, decodes PNG captchas, extracts 4 glyph vectors per image, trains a hybrid character model from the train split, and writes summary plus per-split prediction reports.
 20. If the command is `captcha:analyze`, the analyzer reads the latest model artifacts and reprints holdout confusion, serif hard-case, position, symbol, and 5-attempt metrics.
 21. If the command is `schedule:launchd`, the generator writes a shell script, a `.plist`, and an `INSTALL.md` guide into `scheduler/` so macOS can call the single-run `check` every 2 hours.
-22. If the operator runs `scripts/run-check-every-2-minutes.sh`, the shell helper changes into the project root, runs one `npm run check`, and sleeps only the remaining seconds needed to keep an approximately 2-minute cycle.
+22. If the operator runs `scripts/run-check-every-90-seconds.sh`, the shell helper changes into the project root, runs one `npm run check`, and sleeps only the remaining seconds needed to keep an approximately 90-second cycle.
+23. If the operator runs the older `scripts/run-check-every-2-minutes.sh` path, the wrapper immediately `exec`s into the new 90-second helper so existing habits keep working.
 
 ## 3. Rule Mapping
 
@@ -65,7 +67,7 @@
   Design: `src/launchd.js` generates a macOS `launchd` bundle whose shell script runs exactly one `src/chrome-cli.js check` per trigger.
 
 - Rule: the user may want repeated execution in the current terminal without installing background scheduling.
-  Design: `scripts/run-check-every-2-minutes.sh` provides a foreground loop that stays user-visible, keeps the cadence near 120 seconds, and exits naturally on `Ctrl-C`.
+  Design: `scripts/run-check-every-90-seconds.sh` provides a foreground loop that stays user-visible, keeps the cadence near 90 seconds, and exits naturally on `Ctrl-C`, while the older `run-check-every-2-minutes.sh` path remains a compatibility wrapper.
 
 - Rule: post-captcha selection should only fill the three variable dropdowns.
   Design: the CLI no longer selects country or office after captcha.
@@ -202,7 +204,7 @@
 - Scheduling behavior:
   keep `check` as a single-run entrypoint, generate a separate shell script that `cd`s into the project and runs one check, and point the generated plist at that script with `StartInterval=7200`
 - Foreground-repeat behavior:
-  keep `check` as the single-run entrypoint, and let `scripts/run-check-every-2-minutes.sh` wrap it with a terminal-bound loop that compensates for the last run duration before sleeping
+  keep `check` as the single-run entrypoint, and let `scripts/run-check-every-90-seconds.sh` wrap it with a terminal-bound loop that compensates for the last run duration before sleeping; keep the old 2-minute filename as a thin forwarding wrapper
 
 ## 5. Availability Inference
 

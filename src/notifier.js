@@ -60,36 +60,32 @@ function escapeAppleScriptString(value) {
 
 /**
  * 作用：
- * 构造 macOS 原生通知对应的 AppleScript 命令文本。
+ * 构造 macOS 原生通知对应的 JXA 命令文本。
  *
  * 为什么这样写：
- * 把脚本拼装逻辑抽成纯函数后，可以稳定测试“标题、正文、声音名”是否都进入了最终命令，
- * 避免以后改通知实现时又退回到静默、无声或转义错误的状态。
+ * 这台机器上的 AppleScript `display notification` 解析并不稳定，
+ * 但项目里的 Chrome 桥接已经在使用 JXA。把本机通知也切到 JXA 后，兼容性更一致。
  *
  * 输入：
  * @param {string} title - 通知标题。
  * @param {string} body - 通知正文。
- * @param {string} soundName - 可选通知声音名称。
  *
  * 输出：
- * @returns {string} 可直接传给 `osascript -e` 的 AppleScript 单行命令。
+ * @returns {string} 可直接传给 `osascript -l JavaScript -e` 的 JXA 源码。
  *
  * 注意：
- * - 声音名为空时会退回无声通知命令。
- * - 当前默认声音通常由运行配置提供，例如 `Glass`。
+ * - 通知本体与声音播放分开处理，避免不同 macOS 版本对通知扩展参数支持不一致。
+ * - 当前函数只负责横幅通知本体，不负责播放系统提示音。
  */
-function buildMacOsNotificationAppleScript(title, body, soundName) {
-  const escapedTitle = escapeAppleScriptString(title);
-  const escapedBody = escapeAppleScriptString(body);
-  const normalizedSoundName = String(soundName || "").trim();
+function buildMacOsNotificationJxaSource(title, body) {
+  const normalizedTitle = JSON.stringify(String(title || ""));
+  const normalizedBody = JSON.stringify(String(body || ""));
 
-  if (normalizedSoundName) {
-    return `display notification "${escapedBody}" with title "${escapedTitle}" sound name "${escapeAppleScriptString(
-      normalizedSoundName
-    )}"`;
-  }
-
-  return `display notification "${escapedBody}" with title "${escapedTitle}"`;
+  return [
+    "const app = Application.currentApplication();",
+    "app.includeStandardAdditions = true;",
+    `app.displayNotification(${normalizedBody}, { withTitle: ${normalizedTitle} });`,
+  ].join("\n");
 }
 
 /**
@@ -148,6 +144,37 @@ function buildTerminalBellSequence(repeatCount) {
 
 /**
  * 作用：
+ * 为指定的 macOS 系统声音名称构造候选音频文件路径。
+ *
+ * 为什么这样写：
+ * `display notification` 在不同 macOS 版本上对声音参数支持并不稳定。
+ * 把声音播放拆成独立音频文件调用后，通知横幅和声音提醒就能解耦，失败面更小。
+ *
+ * 输入：
+ * @param {string} soundName - 配置里的系统声音名称。
+ *
+ * 输出：
+ * @returns {string[]} 按优先级排列的候选声音文件路径。
+ *
+ * 注意：
+ * - 当前优先尝试 `.aiff`，再尝试 `.caf`。
+ * - 声音名为空时返回空数组，表示调用方应直接跳过。
+ */
+function buildMacOsSystemSoundCandidates(soundName) {
+  const normalizedSoundName = String(soundName || "").trim();
+
+  if (!normalizedSoundName) {
+    return [];
+  }
+
+  return [
+    `/System/Library/Sounds/${normalizedSoundName}.aiff`,
+    `/System/Library/Sounds/${normalizedSoundName}.caf`,
+  ];
+}
+
+/**
+ * 作用：
  * 发送 macOS 原生通知。
  *
  * 为什么这样写：
@@ -158,24 +185,67 @@ function buildTerminalBellSequence(repeatCount) {
  * @param {string} body - 通知正文。
  *
  * 输出：
- * @param {string} soundName - 可选通知声音名称。
- *
- * 输出：
  * @returns {Promise<void>} 通知完成后的 Promise。
  *
  * 注意：
  * - 仅在 darwin 平台调用。
- * - 默认建议配合系统声音一起发送，避免正好错过静默横幅。
+ * - 声音提醒由独立的系统声音函数负责，避免 AppleScript 兼容问题。
  */
-async function sendMacOsNotification(title, body, soundName) {
+async function sendMacOsNotification(title, body) {
   if (os.platform() !== "darwin") {
     return;
   }
 
   await execFileAsync("osascript", [
+    "-l",
+    "JavaScript",
     "-e",
-    buildMacOsNotificationAppleScript(title, body, soundName),
+    buildMacOsNotificationJxaSource(title, body),
   ]);
+}
+
+/**
+ * 作用：
+ * 播放一段 macOS 系统提示音，作为桌面通知之外的本地声音提醒。
+ *
+ * 为什么这样写：
+ * 当前用户需要“有号时一定能注意到”的强提醒。
+ * 把声音播放独立成系统音频文件调用后，即使通知横幅样式或权限变化，声音提醒也更稳定。
+ *
+ * 输入：
+ * @param {string} soundName - 需要播放的系统声音名称。
+ *
+ * 输出：
+ * @returns {Promise<void>} 声音播放完成后的 Promise。
+ *
+ * 注意：
+ * - 仅在 darwin 平台调用。
+ * - 若候选声音文件都不存在，会抛错给上层记录告警，但不应中断主流程。
+ */
+async function playMacOsSystemSound(soundName) {
+  if (os.platform() !== "darwin") {
+    return;
+  }
+
+  const soundCandidates = buildMacOsSystemSoundCandidates(soundName);
+
+  if (soundCandidates.length === 0) {
+    return;
+  }
+
+  const soundPath = soundCandidates.find((candidatePath) => {
+    try {
+      return require("node:fs").existsSync(candidatePath);
+    } catch (_error) {
+      return false;
+    }
+  });
+
+  if (!soundPath) {
+    throw new Error(`No macOS system sound file found for "${soundName}".`);
+  }
+
+  await execFileAsync("afplay", [soundPath]);
 }
 
 /**
@@ -299,13 +369,17 @@ async function notifyIfNeeded(config, result) {
 
   if (config.notifyMacOs) {
     try {
-      await sendMacOsNotification(
-        payload.title,
-        payload.body,
-        config.notifyMacOsSoundName || "Glass"
-      );
+      await sendMacOsNotification(payload.title, payload.body);
     } catch (error) {
       warningMessages.push(`macOS notification failed: ${String(error.message || error)}`);
+    }
+  }
+
+  if (config.notifyMacOsSoundName) {
+    try {
+      await playMacOsSystemSound(config.notifyMacOsSoundName || "Glass");
+    } catch (error) {
+      warningMessages.push(`macOS sound failed: ${String(error.message || error)}`);
     }
   }
 
@@ -342,12 +416,14 @@ async function notifyIfNeeded(config, result) {
 }
 
 module.exports = {
-  buildMacOsNotificationAppleScript,
+  buildMacOsNotificationJxaSource,
   buildMacOsSpeechText,
+  buildMacOsSystemSoundCandidates,
   buildNotificationPayload,
   buildTerminalBellSequence,
   escapeAppleScriptString,
   notifyIfNeeded,
+  playMacOsSystemSound,
   ringTerminalBell,
   sendMacOsNotification,
   sendMacOsSpeech,

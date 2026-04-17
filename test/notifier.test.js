@@ -2,8 +2,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
-  buildMacOsNotificationAppleScript,
+  buildMacOsNotificationJxaSource,
   buildMacOsSpeechText,
+  buildMacOsSystemSoundCandidates,
   buildNotificationPayload,
   buildTerminalBellSequence,
 } = require("../src/notifier");
@@ -73,11 +74,11 @@ test("buildNotificationPayload returns no-slot copy for unavailable dates", () =
 
 /**
  * 作用：
- * 验证 macOS 通知脚本会包含标题、正文和声音名。
+ * 验证 macOS JXA 通知源码会包含标题和正文。
  *
  * 为什么这样写：
- * 本次修复的核心是把原来容易错过的静默提醒升级成带声音的本机通知。
- * 用纯函数测试锁住最终 AppleScript 内容，能防止以后重构时声音参数再次丢失。
+ * 这次把本机通知从 AppleScript 切到了 JXA。
+ * 用纯函数测试锁住最终 JXA 内容，能防止以后重构时把标题或正文拼错。
  *
  * 输入：
  * @param {object} 无 - 直接构造示例标题和正文。
@@ -87,19 +88,16 @@ test("buildNotificationPayload returns no-slot copy for unavailable dates", () =
  *
  * 注意：
  * - 这里测试的是脚本拼装结果，不直接依赖本机通知权限。
- * - 双引号内容必须保持可安全嵌入 AppleScript。
+ * - 声音播放由独立的系统声音函数负责，不在这条 JXA 源码里内联。
  */
-test("buildMacOsNotificationAppleScript includes sound for positive-hit notifications", () => {
-  const script = buildMacOsNotificationAppleScript(
-    '波兰签证有预约时间',
-    '洛杉矶检测到 1 个可预约时间，请尽快查看。',
-    "Glass"
-  );
+test("buildMacOsNotificationJxaSource includes title and body for positive-hit notifications", () => {
+  const script = buildMacOsNotificationJxaSource('波兰签证有预约时间', '洛杉矶检测到 1 个可预约时间，请尽快查看。');
 
-  assert.match(script, /display notification/);
-  assert.match(script, /with title "波兰签证有预约时间"/);
+  assert.match(script, /displayNotification/);
+  assert.match(script, /withTitle/);
+  assert.match(script, /波兰签证有预约时间/);
   assert.match(script, /洛杉矶检测到 1 个可预约时间，请尽快查看。/);
-  assert.match(script, /sound name "Glass"/);
+  assert.doesNotMatch(script, /sound name/);
 });
 
 /**
@@ -175,4 +173,30 @@ test("buildMacOsSpeechText returns a concise speech message only for available r
 test("buildTerminalBellSequence repeats the terminal bell character", () => {
   assert.equal(buildTerminalBellSequence(3), "\u0007\u0007\u0007");
   assert.equal(buildTerminalBellSequence(0), "\u0007");
+});
+
+/**
+ * 作用：
+ * 验证系统声音候选路径会为给定声音名生成稳定的文件列表。
+ *
+ * 为什么这样写：
+ * 通知声音现在独立通过系统音频文件播放。
+ * 这条测试锁住候选路径生成规则，避免后续重构时把标准系统声音路径拼错。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入示例声音名。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 当前优先级是 `.aiff` 再 `.caf`。
+ * - 空声音名应返回空数组，表示调用方直接跳过声音播放。
+ */
+test("buildMacOsSystemSoundCandidates returns stable sound file candidates", () => {
+  assert.deepEqual(buildMacOsSystemSoundCandidates("Glass"), [
+    "/System/Library/Sounds/Glass.aiff",
+    "/System/Library/Sounds/Glass.caf",
+  ]);
+  assert.deepEqual(buildMacOsSystemSoundCandidates(""), []);
 });

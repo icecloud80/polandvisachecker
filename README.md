@@ -11,7 +11,7 @@ Single-run macOS CLI for checking whether the Poland Schengen visa page for Los 
 - Tries both raw and processed captcha captures and submits the best 4-character model candidate automatically
 - Preserves visible captcha symbols such as `@`, `+`, and `=` instead of stripping them out
 - Scores captcha submissions with distance, segmentation quality, and overall confidence gates before submitting
-- Includes a foreground shell helper for running the checker every 2 minutes in the current terminal until you stop it
+- Includes a foreground shell helper for running the checker every 90 seconds in the current terminal until you stop it
 - Generates a ready-to-install macOS `launchd` bundle for running the checker every 2 hours
 - Clicks `Dalej`
 - Selects:
@@ -72,10 +72,10 @@ Run one end-to-end vacancy check:
 npm run check
 ```
 
-Run the checker every 2 minutes in the current terminal until you press `Ctrl-C`:
+Run the checker every 90 seconds in the current terminal until you press `Ctrl-C`:
 
 ```bash
-./scripts/run-check-every-2-minutes.sh
+./scripts/run-check-every-90-seconds.sh
 ```
 
 Open the target page and print a full debug snapshot:
@@ -191,7 +191,8 @@ npm test
 ## Notes
 
 - `check` is now fully automated around the local captcha model. The terminal no longer blocks waiting for manual captcha correction.
-- `./scripts/run-check-every-2-minutes.sh` is a foreground helper for “run now and keep going in this terminal”; stop it with `Ctrl-C`.
+- `./scripts/run-check-every-90-seconds.sh` is the foreground helper for “run now and keep going in this terminal”; stop it with `Ctrl-C`.
+- `./scripts/run-check-every-2-minutes.sh` remains as a compatibility wrapper and now forwards to the 90-second helper.
 - `check` now loads `model/captcha-model-current/model.json` by default and evaluates the best local-model guess on each attempt.
 - The captcha alphabet remains restricted to known 4-character symbols, including `@`, `+`, `=`, and `#`.
 - The page runtime exposes both raw and processed captcha captures so the local model can score multiple variants before the next retry.
@@ -219,10 +220,10 @@ npm test
 If you want a foreground terminal loop instead of a background scheduler, run:
 
 ```bash
-./scripts/run-check-every-2-minutes.sh
+./scripts/run-check-every-90-seconds.sh
 ```
 
-That helper keeps one `npm run check` cycle every 120 seconds in the current terminal and stops only when you press `Ctrl-C`.
+That helper keeps one `npm run check` cycle every 90 seconds in the current terminal and stops only when you press `Ctrl-C`.
 
 Run:
 
