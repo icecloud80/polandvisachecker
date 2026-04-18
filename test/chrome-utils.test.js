@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
   buildAppleEventsUnavailableMessage,
   buildAppointmentStartUrl,
+  buildSchengenCaptchaEntryUrl,
   buildCaptchaPromptMessage,
   extractBestCaptchaTextCandidate,
   getMissingValueRetryDelayMs,
@@ -246,6 +247,35 @@ test("buildAppointmentStartUrl normalizes the e-Konsulat home entry", () => {
   assert.equal(
     buildAppointmentStartUrl("https://secure.e-konsulat.gov.pl/"),
     "https://secure.e-konsulat.gov.pl/"
+  );
+});
+
+/**
+ * 作用：
+ * 验证固定 Schengen 验证码入口地址的拼接规则。
+ *
+ * 为什么这样写：
+ * 当前已验证的新 shortcut 是“首页英文偏好 + 直接打开验证码 URL”。
+ * 这条测试锁住固定路径，避免后续又退回到旧的多级点击入口。
+ *
+ * 输入：
+ * @param {object} 无 - 直接传入示例 baseUrl。
+ *
+ * 输出：
+ * @returns {void} 无返回值。
+ *
+ * 注意：
+ * - 需要兼容 baseUrl 末尾是否带斜杠。
+ * - 当前路径只针对 Los Angeles Schengen。
+ */
+test("buildSchengenCaptchaEntryUrl returns the fixed Los Angeles captcha entry", () => {
+  assert.equal(
+    buildSchengenCaptchaEntryUrl("https://secure.e-konsulat.gov.pl"),
+    "https://secure.e-konsulat.gov.pl/placowki/126/wiza-schengen/wizyty/weryfikacja-obrazkowa"
+  );
+  assert.equal(
+    buildSchengenCaptchaEntryUrl("https://secure.e-konsulat.gov.pl/"),
+    "https://secure.e-konsulat.gov.pl/placowki/126/wiza-schengen/wizyty/weryfikacja-obrazkowa"
   );
 });
 

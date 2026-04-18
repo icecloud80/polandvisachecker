@@ -364,8 +364,8 @@ function isRecoverableMissingValueError(error) {
  *
  * 为什么这样写：
  * 用户现在要求从 `https://secure.e-konsulat.gov.pl/` 首页开始，
- * 然后依次切英文、选 U、选美国、选洛杉矶、再进入 Schengen 注册页。
- * 把首页入口规范化后，CLI 每轮都能从同一个起点重走这条链路。
+ * 先尝试切到 English，再直接进入固定的 Schengen 验证码 URL。
+ * 把首页入口规范化后，CLI 每轮都能从同一个起点重建这条更短链路。
  *
  * 输入：
  * @param {string} baseUrl - e-Konsulat 首页地址。
@@ -380,6 +380,30 @@ function isRecoverableMissingValueError(error) {
 function buildAppointmentStartUrl(baseUrl) {
   const normalizedBaseUrl = String(baseUrl || "").replace(/\/+$/, "");
   return `${normalizedBaseUrl}/`;
+}
+
+/**
+ * 作用：
+ * 生成固定的 Schengen 验证码入口地址。
+ *
+ * 为什么这样写：
+ * 当前已验证的更短链路是：首页保持英文偏好后，直接跳到 Los Angeles Schengen 的
+ * `weryfikacja-obrazkowa` 地址，而不再逐级点国家、领馆和注册入口。
+ * 把这条地址拼接规则抽成纯函数后，CLI 和测试都能共享同一条契约。
+ *
+ * 输入：
+ * @param {string} baseUrl - e-Konsulat 首页地址。
+ *
+ * 输出：
+ * @returns {string} 固定的验证码入口地址。
+ *
+ * 注意：
+ * - 需要兼容 baseUrl 末尾是否带斜杠。
+ * - 当前仅支持 Los Angeles Schengen 这一路径。
+ */
+function buildSchengenCaptchaEntryUrl(baseUrl) {
+  const normalizedBaseUrl = String(baseUrl || "").replace(/\/+$/, "");
+  return `${normalizedBaseUrl}/placowki/126/wiza-schengen/wizyty/weryfikacja-obrazkowa`;
 }
 
 /**
@@ -598,6 +622,7 @@ module.exports = {
   CAPTCHA_ALLOWED_CHARACTERS,
   buildAppleEventsUnavailableMessage,
   buildAppointmentStartUrl,
+  buildSchengenCaptchaEntryUrl,
   buildCaptchaPromptMessage,
   extractBestCaptchaTextCandidate,
   getMissingValueRetryDelayMs,

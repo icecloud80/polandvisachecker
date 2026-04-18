@@ -14,12 +14,8 @@ const {
   prepareChromeTab,
 } = require("./chrome-bridge");
 const {
-  buildOpenConsulateAction,
-  buildOpenCountryAction,
-  buildOpenCountryLetterAction,
   buildPageExpression,
   buildPatternPresenceAction,
-  buildOpenRegistrationAction,
   buildRefreshCaptchaClickPointAction,
   buildRefreshCaptchaAction,
   buildSelectAction,
@@ -31,6 +27,7 @@ const {
 const {
   buildAppleEventsUnavailableMessage,
   buildAppointmentStartUrl,
+  buildSchengenCaptchaEntryUrl,
   getMissingValueRetryDelayMs,
   hasPostCaptchaEvidence,
   isAppleScriptMissingValue,
@@ -506,8 +503,8 @@ async function runPageAction(actionSource) {
  * 让当前 Chrome 标签页跳转到指定网址，必要时退回到 `prepareChromeTab()`。
  *
  * 为什么这样写：
- * 新流程既有“打开首页”这种显式入口，也有国家/领馆/注册链接这种逐步跳转。
- * 把页面跳转统一收口后，首页导航、链接跳转和缺失标签页 fallback 都能复用同一条逻辑。
+ * 新流程既有“打开首页”这种显式入口，也有“直接跳固定验证码 URL”这种短链路导航。
+ * 把页面跳转统一收口后，首页导航、固定 URL 导航和缺失标签页 fallback 都能复用同一条逻辑。
  *
  * 输入：
  * @param {object} config - 运行配置。
@@ -537,10 +534,10 @@ async function navigateChromeToUrl(config, targetUrl) {
 
 /**
  * 作用：
- * 执行一个“留在当前页”的入口步骤，例如切英文或点击 `U`。
+ * 执行一个“留在当前页”的入口步骤，例如切英文。
  *
  * 为什么这样写：
- * 新入口流程里既有真正跳页的链接，也有页内状态切换动作。
+ * 新入口流程里仍有页内状态切换动作。
  * 把页内动作单独封装后，CLI 可以统一打印日志、等待渲染，并在动作没生效时给出明确提示。
  *
  * 输入：
@@ -610,7 +607,7 @@ async function waitForEntryEvidence(config, logLabel, evidenceActionSource) {
  * 判断入口证据动作是否已经确认页面到达了可接受的后续状态。
  *
  * 为什么这样写：
- * 首页国家 / 领馆 / 注册入口之间现在会共享同一套“下一页证据”结构。
+ * 首页短链路和固定验证码入口现在会共享同一套“下一页证据”结构。
  * 把 `matched === true` 的判定抽成独立纯函数后，步骤开始前预检、失败后的竞态复检、轮询等待都能复用同一套规则。
  *
  * 输入：
@@ -732,8 +729,9 @@ async function runHrefEntryNavigation(
  * 引导真实 Chrome 页面走到目标预约表单状态。
  *
  * 为什么这样写：
- * 目标站点流程已经从“固定验证码 URL”变成“首页切英文后逐级选择国家、领馆和签证入口”。
- * 在这里按明确步骤重建入口链路后，后面的验证码和日期判断逻辑可以保持原样复用。
+ * live 站点已经验证出一条更短且更稳的入口链路：首页先保持英文偏好，
+ * 然后直接跳到固定的 Los Angeles Schengen 验证码 URL。
+ * 这样可以绕开旧的国家、领馆和注册链接逐级点击链路，减少页面结构漂移带来的失败点。
  *
  * 输入：
  * @param {object} config - 运行配置。
@@ -742,66 +740,26 @@ async function runHrefEntryNavigation(
  * @returns {Promise<void>} 页面准备完成后的 Promise。
  *
  * 注意：
- * - 当前流程固定为：首页 -> English -> U -> United States of America -> Los Angeles -> Schengen Visa - Register the form。
- * - 首次打开首页的等待时间比后续步骤更长，因为主页和国家列表页都更容易出现慢加载。
+ * - 当前流程固定为：首页 -> 尝试切 English -> 直接打开固定验证码 URL。
+ * - 如果首页语言下拉本次未出现，仍会继续尝试固定验证码 URL，因为 live 验证证明这条直达链路可以工作。
  */
 async function driveChromeToRegistrationEntry(config) {
   const startUrl = buildAppointmentStartUrl(config.baseUrl);
+  const captchaEntryUrl = buildSchengenCaptchaEntryUrl(config.baseUrl);
 
   logStep("opening e-Konsulat home page");
   await navigateChromeToUrl(config, startUrl);
   await sleep(Math.max(config.chromeStepDelayMs, 9000));
 
   await runInlineEntryAction(config, "switching language to English", buildSwitchEnglishAction());
-  await runInlineEntryAction(
+
+  logStep("opening direct Schengen captcha entry");
+  await navigateChromeToUrl(config, captchaEntryUrl);
+  await sleep(Math.max(config.chromeStepDelayMs, 6000));
+
+  const matchedCaptchaEntry = await waitForEntryEvidence(
     config,
-    "opening the U country list",
-    buildOpenCountryLetterAction()
-  );
-  await runHrefEntryNavigation(
-    config,
-    "opening United States of America",
-    buildOpenCountryAction(),
-    4500,
-    buildPatternPresenceAction(
-      "runtime.CONFIG.consulatePattern",
-      "expectConsulateList",
-      [
-        "runtime.CONFIG.registrationPattern",
-        "runtime.CONFIG.imageVerificationPattern"
-      ],
-      [
-        "registration_home",
-        "captcha_step",
-        "selection_step",
-        "all_dates_reserved",
-        "date_options_present"
-      ]
-    )
-  );
-  await runHrefEntryNavigation(
-    config,
-    "opening Consulate General of the Republic of Poland in Los Angeles",
-    buildOpenConsulateAction(),
-    4500,
-    buildPatternPresenceAction(
-      "runtime.CONFIG.registrationPattern",
-      "expectRegistrationList",
-      ["runtime.CONFIG.imageVerificationPattern"],
-      [
-        "registration_home",
-        "captcha_step",
-        "selection_step",
-        "all_dates_reserved",
-        "date_options_present"
-      ]
-    )
-  );
-  await runHrefEntryNavigation(
-    config,
-    "opening Schengen Visa - Register the form",
-    buildOpenRegistrationAction(),
-    6000,
+    "opening direct Schengen captcha entry",
     buildPatternPresenceAction(
       "runtime.CONFIG.imageVerificationPattern",
       "expectCaptchaStep",
@@ -809,6 +767,10 @@ async function driveChromeToRegistrationEntry(config) {
       ["captcha_step", "selection_step", "all_dates_reserved", "date_options_present"]
     )
   );
+
+  if (!matchedCaptchaEntry) {
+    throw new Error("opening direct Schengen captcha entry did not expose captcha or later-step evidence.");
+  }
 }
 
 /**

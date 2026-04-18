@@ -24,8 +24,8 @@
 
 1. `check` loads config and ensures `artifacts/` exists.
 2. The CLI opens real Chrome to `https://secure.e-konsulat.gov.pl/`.
-3. The CLI switches the yellow top-bar `Wersja językowa / Language version` dropdown to `English`, opens `U`, then opens `United States of America`.
-4. The CLI opens `Consulate General of the Republic of Poland in Los Angeles`, then `Schengen Visa - Register the form`.
+3. The CLI switches the yellow top-bar `Wersja językowa / Language version` dropdown to `English` when that control is available.
+4. The CLI opens the fixed Los Angeles Schengen captcha URL directly.
 5. The CLI verifies that Apple Events JavaScript is available in Chrome.
 6. The page runtime snapshots the current state.
 7. If the page is at captcha:
@@ -37,7 +37,7 @@
    - submit the best local-model guess only when it passes the quality gates
    - if the captcha is rejected, capture the refreshed image and retry automatically
    - fill the captcha input and click `Next`
-8. If captcha success returns to the registration home, reopen the English homepage flow and re-enter the Los Angeles Schengen registration page.
+8. If captcha success returns to the registration home, reopen the English homepage and then re-enter the fixed Los Angeles Schengen captcha URL.
 9. If the page is at the selection step, the runtime selects:
    - `Type of service = Schengen Visa`
    - `Location = Los Angeles`
@@ -61,7 +61,7 @@
 ## 3. Rule Mapping
 
 - Rule: the tool should only support the Los Angeles Schengen flow.
-  Design: the bridge always starts from the e-Konsulat homepage, switches to English, opens the `U -> United States of America -> Consulate General of the Republic of Poland in Los Angeles -> Schengen Visa - Register the form` chain, and only then continues into the existing captcha flow.
+  Design: the bridge starts from the e-Konsulat homepage, attempts to set English, and then opens the fixed Los Angeles Schengen captcha URL directly before continuing into the existing captcha flow.
 
 - Rule: recurring execution should wrap the single-run checker instead of introducing a separate watch loop.
   Design: `src/launchd.js` generates a macOS `launchd` bundle whose shell script runs exactly one `src/chrome-cli.js check` per trigger.
@@ -117,29 +117,14 @@
 - Rule: positive-hit desktop notifications should be readable at a glance by the local operator.
   Design: `src/notifier.js` emits concise Chinese notification copy for local alerts and reused webhook payloads, while macOS local delivery now layers notification sound, terminal bell, and optional speech on top of the same payload.
 
-- Rule: the live site entry path should match the visible English UI instead of assuming a stale deep link.
-  Design: `src/chrome-cli.js` now drives a small sequence of homepage actions, while `src/chrome-page.js` exposes dedicated runtime actions for switching the language dropdown, clicking the `U` filter, and resolving the country / consulate / registration href targets.
+- Rule: the live site entry path should minimize brittle menu navigation.
+  Design: `src/chrome-cli.js` now drives a short homepage action sequence: attempt the language switch, then navigate straight to the fixed Los Angeles Schengen captcha URL.
 
 - Rule: the homepage language dropdown must still be found when the top-bar label is visually present but not cleanly attached to the DOM control.
   Design: `src/chrome-page.js` now explicitly locates the yellow top-bar `Wersja językowa / Language version` dropdown, including the live `mat-select / role="combobox"` markup, scores it with layout and language-option evidence, and then switches that exact control to `English`.
 
-- Rule: entry links must still work when the live Angular list renders `<a href="">` placeholders instead of concrete URLs.
-  Design: `src/chrome-page.js` now treats country / consulate / registration links as dual-mode actions: inspect the raw anchor `href` attribute, use a real href only when that raw attribute is non-empty, otherwise trigger the matched clickable element inline and let `src/chrome-cli.js` wait for the route change.
-
-- Rule: clicking an empty-`href` Angular entry must not reopen the current page.
-  Design: `src/chrome-page.js` now detects placeholder anchors and skips the native `.click()` call for them, while still dispatching the synthetic pointer / mouse events that Angular handlers rely on.
-
-- Rule: list-style country and consulate pages must click the exact matched row instead of the first link inside a broad container match.
-  Design: `src/chrome-page.js` now ranks navigation candidates by tighter text / area heuristics and only falls back to descendants that also match the requested pattern, so `UNITED STATES OF AMERICA (14)` does not collapse to an unrelated sibling link.
-
-- Rule: entry navigation should not continue until the next page has actually exposed the expected evidence.
-  Design: `src/chrome-cli.js` now polls for consulate / registration / captcha evidence after each homepage navigation step, and if an inline click still does not advance the page, it retries once with a real pointer click using the target element's screen coordinates.
-
-- Rule: a homepage click that lands directly on a later valid page should still count as successful progress.
-  Design: `src/chrome-page.js` now lets each entry evidence action accept fallback downstream patterns plus specific `readAvailability()` reasons such as `registration_home`, `captcha_step`, `selection_step`, `all_dates_reserved`, and `date_options_present`, so `src/chrome-cli.js` does not reject flows that skip an intermediate page.
-
-- Rule: once the page has already advanced to a valid downstream state, later stale entry clicks should be skipped instead of retried as hard failures.
-  Design: `src/chrome-cli.js` now prechecks expected entry evidence before each country / consulate / registration action, and when a target cannot be resolved it rechecks the same evidence once more before throwing, so fast or self-refreshing transitions do not break the flow.
+- Rule: the shorter direct captcha URL path must still verify that the page really reached captcha or a later valid state.
+  Design: `src/chrome-cli.js` navigates straight to the fixed captcha URL and then waits for evidence matching `captcha_step`, `selection_step`, `all_dates_reserved`, or `date_options_present` before continuing.
 
 - Rule: the homepage language dropdown must never be mistaken for a post-captcha appointment-form dropdown.
   Design: `src/chrome-page.js` now removes the homepage language trigger from appointment choice ordering and only enables field-order fallback when at least two appointment-form dropdowns are visible, so the country page no longer collapses into a false `selection_step`.

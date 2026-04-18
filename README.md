@@ -8,10 +8,7 @@ Single-run macOS CLI for checking whether the Poland Schengen visa appointment f
 - Opens:
   `https://secure.e-konsulat.gov.pl/`
 - Switches the yellow top-bar `Wersja językowa / Language version` dropdown to `English`
-- Opens the `U` country list
-- Opens `United States of America`
-- Opens `Consulate General of the Republic of Poland in Los Angeles`
-- Opens `Schengen Visa - Register the form`
+- Opens the fixed Los Angeles Schengen captcha URL directly
 - Uses the local captcha hybrid model directly in `check`
 - Tries both raw and processed captcha captures and submits the best 4-character model candidate automatically
 - Preserves visible captcha symbols such as `@`, `+`, and `=` instead of stripping them out
@@ -167,19 +164,17 @@ npm test
 1. Opens or reuses a Chrome tab on the e-Konsulat site
 2. Opens the e-Konsulat home page
 3. Switches the page language to `English`
-4. Opens the `U` country index, then enters `United States of America`
-5. Opens `Consulate General of the Republic of Poland in Los Angeles`
-6. Opens `Schengen Visa - Register the form`
-7. Extracts the captcha image from the page
-8. Saves the captcha image into `artifacts/`
-9. Runs the local captcha model against raw and processed captures
-10. Evaluates the best candidate with distance, segmentation quality, and overall confidence gates
-11. Submits the best 4-character candidate only when it passes those quality gates; otherwise refreshes captcha and retries
-12. If captcha UI disappears after submit, treats that as a post-captcha transition instead of re-entering captcha logic
-13. Selects the three post-captcha dropdowns on the English page
-14. Detects either real `Date` options or the final Polish “all reserved” state
-15. Saves `post-captcha-before-selection` and `post-captcha-after-selection` artifacts
-16. Prints compact JSON like:
+4. Opens the fixed Los Angeles Schengen captcha URL directly
+5. Extracts the captcha image from the page
+6. Saves the captcha image into `artifacts/`
+7. Runs the local captcha model against raw and processed captures
+8. Evaluates the best candidate with distance, segmentation quality, and overall confidence gates
+9. Submits the best 4-character candidate only when it passes those quality gates; otherwise refreshes captcha and retries
+10. If captcha UI disappears after submit, treats that as a post-captcha transition instead of re-entering captcha logic
+11. Selects the three post-captcha dropdowns on the English page
+12. Detects either real `Date` options or the final Polish “all reserved” state
+13. Saves `post-captcha-before-selection` and `post-captcha-after-selection` artifacts
+14. Prints compact JSON like:
 
 ```json
 {
@@ -192,9 +187,9 @@ npm test
 }
 ```
 
-17. Prints one final Chinese summary line:
+15. Prints one final Chinese summary line:
     `有预约时间` or `没有预约时间`
-18. If the result is `没有预约时间`, closes the current e-Konsulat Chrome tab; if dates are available or the run ends in an abnormal state, leaves the tab open for manual inspection
+16. If the result is `没有预约时间`, closes the current e-Konsulat Chrome tab; if dates are available or the run ends in an abnormal state, leaves the tab open for manual inspection
 
 ## Result Reasons
 
@@ -228,16 +223,11 @@ npm test
 - The post-captcha selector runtime now falls back to the visible vertical order of the four `mat-select` controls when the live page does not expose usable label text around each dropdown.
 - That field-order fallback now explicitly excludes the homepage language dropdown and only activates when at least two appointment-form dropdowns are visible, so the country search page is not misread as the post-captcha selection form.
 - The homepage language switch now explicitly targets the yellow top-bar `Wersja językowa / Language version` dropdown, including the live `mat-select / role="combobox"` variant, so the run can still pick `English` even when generic field matching is unreliable.
-- The homepage country / consulate / registration entry actions now also tolerate live Angular links whose `<a>` tags expose empty `href=""` values and only navigate through click handlers.
-- Those entry actions now read the raw anchor `href` attribute instead of the browser-expanded `element.href`, so empty Angular `href=""` placeholders do not get mistaken for a real current-page URL and trigger a full-page refresh.
-- The page runtime now also suppresses native `.click()` on empty-`href` placeholder anchors, so country and consulate entries can still fire Angular handlers without reopening the current page.
-- Those homepage entry actions now also prefer the smallest matched node or matched descendant, so country lists like `UNITED STATES OF AMERICA (14)` do not accidentally fall through to the first unrelated link in the same container.
-- After clicking `United States`, `Los Angeles`, or the Schengen registration entry, the CLI now waits for the next page evidence to appear before continuing, and can retry once with a real pointer click when an inline Angular click does not visibly advance the page.
-- That entry evidence check now also accepts later valid pages such as the registration form, captcha step, selection step, or final no-slot state, so the CLI does not fail when the live site skips an intermediate list page and jumps farther ahead.
-- Before trying the next homepage entry click, the CLI now also prechecks whether the page has already advanced to a downstream valid state, so it will skip stale intermediate clicks instead of failing on a list item that no longer exists.
+- The entry flow now uses the shorter verified path: open the homepage, try to set `English`, then navigate straight to the fixed Los Angeles Schengen captcha URL.
+- In the current live probe, the homepage language switch did not expose a usable control, but the direct captcha URL still opened the correct English captcha page; the CLI now follows that proven path instead of depending on the older country / consulate menu chain.
 - Final “all reserved” detection now also falls back to normalized `bodyTextSample/bodyTextTailSample`, so the Polish result is still recognized even when runtime-level `unavailabilityText` is temporarily empty.
 - When `check` ends with no available dates, the CLI now best-effort closes the matching e-Konsulat Chrome tab, while keeping positive hits and abnormal states open for manual follow-up.
-- The entry flow now starts from the site homepage and replays the English `U -> United States of America -> Los Angeles -> Schengen Visa - Register the form` chain instead of assuming the old fixed captcha URL still works.
+- The entry flow now starts from the site homepage, attempts to set English, and then opens the fixed Los Angeles Schengen captcha URL directly.
 - Positive hits still use macOS desktop notification support when enabled, and the notification copy is now Chinese.
 - Positive hits now also request a macOS notification sound, ring the current terminal bell, and speak a short local alert by default, so foreground repeat-check runs are much harder to miss.
 - Debug mode is intentionally verbose; normal `check` output is intentionally compact.

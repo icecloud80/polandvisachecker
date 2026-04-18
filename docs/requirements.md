@@ -17,10 +17,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat English 
 - Open real Google Chrome on macOS.
 - Open `https://secure.e-konsulat.gov.pl/`.
 - Switch the yellow top-bar `Wersja językowa / Language version` dropdown to `English`.
-- Click the `U` country filter.
-- Open `United States of America`.
-- Open `Consulate General of the Republic of Poland in Los Angeles`.
-- Open `Schengen Visa - Register the form`.
+- Open the fixed Los Angeles Schengen captcha URL directly after the English-preference step.
 - Detect whether the current page is:
   - captcha step
   - post-captcha selection step
@@ -101,7 +98,7 @@ Build a single-run local tool that checks whether the Polish e-Konsulat English 
 - Captcha suggestion generation must preserve symbol characters such as `@`, `#`, `+`, and `=` in OCR outputs.
 - The tool must prioritize the fixed English homepage flow for Los Angeles Schengen only.
 - The tool must still identify the yellow top-bar homepage language dropdown when the visible `Wersja językowa / Language version` text is not directly bound to the underlying DOM control, including the live `mat-select / role="combobox"` implementation.
-- The tool must still follow homepage country / consulate / registration entries when the live Angular list exposes empty `href=""` anchors and relies on click handlers for navigation.
+- The tool must prefer the shorter verified entry path: homepage English preference followed by direct navigation to the fixed Los Angeles Schengen captcha URL.
 - The tool must not treat a browser-expanded current-page `element.href` value as a real navigation target when the raw anchor attribute is actually empty.
 - The tool must not invoke native anchor navigation for empty-`href` placeholder links, because those entries should stay on the current document and only fire framework click handlers.
 - The tool must not collapse a matched country / consulate container to the first unrelated link inside that list item or parent list.
@@ -127,14 +124,12 @@ Build a single-run local tool that checks whether the Polish e-Konsulat English 
 
 - Start on `https://secure.e-konsulat.gov.pl/`.
 - Switch the page language to English through the yellow top-bar language dropdown.
-- Click `U`, then open `United States of America`.
-- Open `Consulate General of the Republic of Poland in Los Angeles`.
-- Open `Schengen Visa - Register the form`.
+- Open the fixed Los Angeles Schengen captcha URL directly after the English-preference step.
 - If the page is still at captcha, run OCR against the raw captcha capture first.
 - If the local captcha model has multiple variant predictions for the current captcha image, score them with distance, segmentation quality, and overall confidence before deciding whether to submit or refresh.
 - If the captcha is rejected, capture the refreshed image and retry automatically for up to 5 attempts.
 - If the best current model guess fails the segmentation-quality or confidence gate, refresh the captcha without submitting that guess.
-- If captcha success returns to the registration home, reopen the English homepage flow and enter the registration page again.
+- If captcha success returns to the registration home, reopen the English homepage and then re-enter the fixed captcha URL directly.
 - If the command is `collect-captcha`, stay on the captcha page, save the current captcha image set, refresh, and repeat until the requested sample count is reached.
 - During `collect-captcha`, if refresh does not change the captcha image yet, keep waiting or retry refreshing instead of saving a duplicate sample.
 - During `collect-captcha`, each saved sample must inherit the provenance of the refresh step that produced it, so later labeling can distinguish initial-load images from DOM-refresh or real-click images.
@@ -317,8 +312,6 @@ Build a single-run local tool that checks whether the Polish e-Konsulat English 
 - 2026-04-16: added a foreground repeat-check helper so the checker can now be repeated in the current terminal every 2 minutes until the operator stops it with `Ctrl-C`.
 - 2026-04-16: strengthened positive-hit local alerts so macOS runs now request a notification sound, ring the current terminal bell, and speak a short reminder instead of relying on a silent banner only.
 - 2026-04-16: replaced the old foreground repeat-check entry with `scripts/run-check.sh`, restored the default cadence to 2 minutes, and added `-m=<minutes>` / `-m <minutes>` overrides.
-- 2026-04-16: changed the appointment entry flow to start from `https://secure.e-konsulat.gov.pl/`, switch to English, open `U -> United States of America -> Consulate General of the Republic of Poland in Los Angeles -> Schengen Visa - Register the form`, and then continue with the existing captcha and availability logic.
-- 2026-04-16: hardened the homepage language switch by explicitly targeting the yellow top-bar `Wersja językowa / Language version` dropdown, including the live `mat-select / role="combobox"` implementation for `English / Angielska`, and widened the country / consulate matching to tolerate the live Polish labels when the page has not switched yet.
-- 2026-04-16: hardened the homepage entry navigation again so country / consulate / registration steps now tolerate live Angular `<a href="">` links by falling back to inline click navigation when no concrete href is available.
-- 2026-04-16: tightened homepage country / consulate target resolution so broad container matches now prefer the exact matched row or matched descendant instead of accidentally clicking the first unrelated link in the list.
+- 2026-04-16: changed the appointment entry flow to start from `https://secure.e-konsulat.gov.pl/`, attempt to switch to English, and then open the fixed Los Angeles Schengen captcha URL directly.
+- 2026-04-17: validated live that the direct captcha URL still lands on a real captcha page even when the homepage language switch action does not expose a usable control, so the shorter direct-navigation path replaced the older country / consulate menu chain.
 - 2026-04-16: hardened homepage navigation again so `United States`, `Los Angeles`, and registration clicks now wait for next-page evidence and can retry once with a real pointer click if the inline Angular click does not visibly advance the route.
